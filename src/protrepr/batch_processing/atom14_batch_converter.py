@@ -2,7 +2,7 @@
 Atom14 批量转换核心实现
 
 提供高效的批量 PDB/CIF 到 Atom14 转换功能，支持并行处理、
-多种输出格式和完整的错误处理。
+PyTorch 原生格式输出和完整的错误处理。
 """
 
 import time
@@ -14,12 +14,10 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing as mp
 
 import torch
-import numpy as np
 from protein_tensor import load_structure
 
 # 本地导入
 from ..core.atom14 import Atom14
-from ..representations.atom14_converter import save_atom14_to_cif
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +30,8 @@ class BatchPDBToAtom14Converter:
     - 并行处理多个文件
     - 递归目录扫描
     - 保持目录结构
-    - 多种输出格式 (npz, pt)
+    - PyTorch 原生格式 (.pt)
+    - 实例或字典格式保存选项
     - 错误处理和统计
     """
     
@@ -41,7 +40,7 @@ class BatchPDBToAtom14Converter:
         n_workers: Optional[int] = None,
         preserve_structure: bool = True,
         device: str = "cpu",
-        output_format: str = "npz"
+        save_as_instance: bool = True
     ) -> None:
         """
         初始化批量转换器。
@@ -50,21 +49,18 @@ class BatchPDBToAtom14Converter:
             n_workers: 并行工作进程数，默认为 CPU 核心数的一半
             preserve_structure: 是否保持目录结构
             device: 计算设备 ("cpu" 或 "cuda")
-            output_format: 输出格式 ("npz" 或 "pt")
+            save_as_instance: 是否保存为 Atom14 实例 (True) 或字典格式 (False)
         """
         self.n_workers = n_workers or max(1, mp.cpu_count() // 2)
         self.preserve_structure = preserve_structure
         self.device = torch.device(device)
-        self.output_format = output_format.lower()
-        
-        if self.output_format not in ["npz", "pt"]:
-            raise ValueError(f"不支持的输出格式: {output_format}")
+        self.save_as_instance = save_as_instance
         
         logger.info(f"批量转换器初始化完成:")
         logger.info(f"  - 工作进程数: {self.n_workers}")
         logger.info(f"  - 保持目录结构: {preserve_structure}")
         logger.info(f"  - 设备: {self.device}")
-        logger.info(f"  - 输出格式: {self.output_format}")
+        logger.info(f"  - 保存格式: {'Atom14实例' if save_as_instance else 'Atom14字典'}")
     
     def find_structure_files(
         self,
@@ -125,7 +121,8 @@ class BatchPDBToAtom14Converter:
             'processing_time': 0.0,
             'num_residues': 0,
             'num_atoms': 0,
-            'num_chains': 0
+            'num_chains': 0,
+            'save_format': 'instance' if self.save_as_instance else 'dict'
         }
         
         start_time = time.perf_counter()
@@ -133,19 +130,15 @@ class BatchPDBToAtom14Converter:
         try:
             logger.debug(f"开始转换: {input_file}")
             
-            # 1. 加载蛋白质结构
+            # 1. 加载蛋白质结构 (使用 torch 后端)
             protein_tensor = load_structure(input_file)
             
             # 2. 转换为 Atom14
             atom14 = Atom14.from_protein_tensor(protein_tensor)
             
-            # 3. 保存结果
+            # 3. 保存结果 - 使用新的 Atom14.save() 方法
             output_file.parent.mkdir(parents=True, exist_ok=True)
-            
-            if self.output_format == "npz":
-                self._save_atom14_npz(atom14, output_file)
-            else:  # pt
-                self._save_atom14_pt(atom14, output_file)
+            atom14.save(output_file, save_as_instance=self.save_as_instance)
             
             # 4. 收集统计信息
             result.update({
@@ -167,49 +160,6 @@ class BatchPDBToAtom14Converter:
             logger.error(f"转换失败 {input_file}: {e}")
         
         return result
-    
-    def _save_atom14_npz(self, atom14: Atom14, output_file: Path) -> None:
-        """保存 Atom14 数据为 NPZ 格式。"""
-        # 保存主要数据
-        np.savez_compressed(
-            output_file,
-            coords=atom14.coords.cpu().numpy(),
-            atom_mask=atom14.atom_mask.cpu().numpy(),
-            res_mask=atom14.res_mask.cpu().numpy(),
-            chain_ids=atom14.chain_ids.cpu().numpy(),
-            residue_types=atom14.residue_types.cpu().numpy(),
-            residue_indices=atom14.residue_indices.cpu().numpy(),
-            chain_residue_indices=atom14.chain_residue_indices.cpu().numpy(),
-            residue_names=atom14.residue_names.cpu().numpy(),
-            atom_names=atom14.atom_names.cpu().numpy(),
-            # 简单的元数据
-            num_residues=np.array(atom14.num_residues),
-            num_chains=np.array(atom14.num_chains)
-        )
-    
-    def _save_atom14_pt(self, atom14: Atom14, output_file: Path) -> None:
-        """保存 Atom14 数据为 PyTorch 格式。"""
-        data = {
-            'coords': atom14.coords,
-            'atom_mask': atom14.atom_mask,
-            'res_mask': atom14.res_mask,
-            'chain_ids': atom14.chain_ids,
-            'residue_types': atom14.residue_types,
-            'residue_indices': atom14.residue_indices,
-            'chain_residue_indices': atom14.chain_residue_indices,
-            'residue_names': atom14.residue_names,
-            'atom_names': atom14.atom_names,
-            'metadata': {
-                'format': 'atom14',
-                'version': '1.0',
-                'num_residues': atom14.num_residues,
-                'num_chains': atom14.num_chains,
-                'device': str(atom14.device),
-                'batch_shape': list(atom14.batch_shape)
-            }
-        }
-        
-        torch.save(data, output_file)
     
     def convert_batch(
         self,
@@ -246,12 +196,8 @@ class BatchPDBToAtom14Converter:
                 # 扁平输出结构
                 rel_path = file_path.name
             
-            # 更改扩展名
-            if self.output_format == "npz":
-                output_name = Path(rel_path).with_suffix('.npz')
-            else:  # pt
-                output_name = Path(rel_path).with_suffix('.pt')
-            
+            # 统一使用 .pt 扩展名
+            output_name = Path(rel_path).with_suffix('.pt')
             output_path = output_dir / output_name
             tasks.append((file_path, output_path))
         
@@ -274,7 +220,7 @@ class BatchPDBToAtom14Converter:
                 # 提交所有任务
                 future_to_task = {
                     executor.submit(convert_single_worker, str(input_file), str(output_file), 
-                                  self.output_format, str(self.device)): (input_file, output_file)
+                                  str(self.device), self.save_as_instance): (input_file, output_file)
                     for input_file, output_file in tasks
                 }
                 
@@ -296,7 +242,8 @@ class BatchPDBToAtom14Converter:
                             'processing_time': 0.0,
                             'num_residues': 0,
                             'num_atoms': 0,
-                            'num_chains': 0
+                            'num_chains': 0,
+                            'save_format': 'instance' if self.save_as_instance else 'dict'
                         }
                         results.append(result)
                         failed_files.append(str(input_file))
@@ -310,7 +257,13 @@ class BatchPDBToAtom14Converter:
             'success': success_count,
             'failed': failed_count,
             'failed_files': failed_files,
-            'results': results
+            'results': results,
+            'converter_settings': {
+                'save_as_instance': self.save_as_instance,
+                'device': str(self.device),
+                'workers': self.n_workers,
+                'preserve_structure': self.preserve_structure
+            }
         }
         
         logger.info(f"批量转换完成: {success_count} 成功, {failed_count} 失败")
@@ -320,8 +273,8 @@ class BatchPDBToAtom14Converter:
 def convert_single_worker(
     input_file: str,
     output_file: str,
-    output_format: str,
-    device: str
+    device: str,
+    save_as_instance: bool
 ) -> Dict[str, Any]:
     """
     工作进程函数，用于并行处理。
@@ -329,8 +282,8 @@ def convert_single_worker(
     Args:
         input_file: 输入文件路径
         output_file: 输出文件路径
-        output_format: 输出格式
         device: 设备
+        save_as_instance: 是否保存为实例
         
     Returns:
         转换结果
@@ -339,8 +292,8 @@ def convert_single_worker(
         # 创建新的转换器实例
         converter = BatchPDBToAtom14Converter(
             n_workers=1,
-            output_format=output_format,
-            device=device
+            device=device,
+            save_as_instance=save_as_instance
         )
         return converter.convert_single_file(Path(input_file), Path(output_file))
     except Exception as e:
@@ -353,7 +306,8 @@ def convert_single_worker(
             'processing_time': 0.0,
             'num_residues': 0,
             'num_atoms': 0,
-            'num_chains': 0
+            'num_chains': 0,
+            'save_format': 'instance' if save_as_instance else 'dict'
         }
 
 
@@ -367,8 +321,8 @@ def save_statistics(statistics: Dict[str, Any], output_file: Path) -> None:
         clean_result = result.copy()
         # 确保所有数值都是 JSON 可序列化的
         for key, value in clean_result.items():
-            if isinstance(value, (np.integer, np.floating)):
-                clean_result[key] = float(value)
+            if hasattr(value, 'item'):  # torch tensor 或 numpy scalar
+                clean_result[key] = value.item() if hasattr(value, 'item') else float(value)
         clean_results.append(clean_result)
     
     clean_stats['results'] = clean_results

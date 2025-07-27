@@ -9,8 +9,11 @@
     python batch_pdb_to_atom14.py input_dir output_dir [options]
 
 示例:
-    # 基本用法
+    # 基本用法 (保存为 Atom14 实例)
     python batch_pdb_to_atom14.py /path/to/pdb_files /path/to/output
+    
+    # 保存为字典格式
+    python batch_pdb_to_atom14.py /path/to/pdb_files /path/to/output --save-as-dict
     
     # 使用并行处理
     python batch_pdb_to_atom14.py /path/to/pdb_files /path/to/output --workers 8
@@ -54,7 +57,7 @@ def main():
         epilog="""
 示例:
   %(prog)s /data/pdb_files /data/atom14_output
-  %(prog)s /data/pdb_files /data/atom14_output --workers 8 --format pt
+  %(prog)s /data/pdb_files /data/atom14_output --workers 8 --save-as-dict
   %(prog)s input.pdb output_dir --no-preserve-structure --device cuda
         """
     )
@@ -99,10 +102,9 @@ def main():
     )
     
     parser.add_argument(
-        '--format', '-f',
-        choices=['npz', 'pt'],
-        default='npz',
-        help='输出格式 (默认: npz)'
+        '--save-as-dict',
+        action='store_true',
+        help='保存为字典格式而非 Atom14 实例 (默认: 保存为实例)'
     )
     
     parser.add_argument(
@@ -139,11 +141,14 @@ def main():
             n_workers=args.workers,
             preserve_structure=not args.no_preserve_structure,
             device=args.device,
-            output_format=args.format
+            save_as_instance=not args.save_as_dict  # 默认保存为实例
         )
         
         # 执行批量转换
         logger.info(f"开始批量转换: {args.input_path} -> {args.output_dir}")
+        save_format = "字典格式" if args.save_as_dict else "Atom14实例"
+        logger.info(f"保存格式: {save_format}")
+        
         start_time = time.perf_counter()
         
         statistics = converter.convert_batch(
@@ -160,6 +165,7 @@ def main():
         logger.info(f"  总文件数: {statistics['total']}")
         logger.info(f"  成功转换: {statistics['success']}")
         logger.info(f"  转换失败: {statistics['failed']}")
+        logger.info(f"  保存格式: {save_format}")
         logger.info(f"  总用时: {total_time:.2f} 秒")
         
         if statistics['success'] > 0:

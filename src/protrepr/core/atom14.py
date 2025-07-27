@@ -1,5 +1,5 @@
 """
-Atom14 蛋白质表示数据类
+Atom14 蛋白质表示数据.
 
 本模块定义了 Atom14 数据类，用于表示紧凑型原子表示法。该类封装了蛋白质结构的
 atom14 表示相关的所有数据和方法，支持与 ProteinTensor 的双向转换。
@@ -16,10 +16,10 @@ atom14 表示相关的所有数据和方法，支持与 ProteinTensor 的双向�
 import logging
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List, Union
-
+from pathlib import Path
 import torch
 from protein_tensor import ProteinTensor
-from ..representations.atom14_converter import protein_tensor_to_atom14, atom14_to_protein_tensor, validate_atom14_data
+from ..representations.atom14_converter import protein_tensor_to_atom14, atom14_to_protein_tensor, validate_atom14_data, save_atom14_to_cif
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +43,8 @@ class Atom14:
         residue_indices: 形状为 (..., num_residues) 的残基在蛋白质中的全局编号
                         支持链间 gap，如 A链:1-100, B链:200-300
         chain_residue_indices: 形状为 (..., num_residues) 的残基在各自链中的局部编号
-        residue_names: 形状为 (..., num_residues) 的残基名称张量（整数编码）
-        atom_names: 形状为 (14,) 的 atom14 标准原子名称张量（整数编码）
+        residue_names: 形状为 (..., num_residues) 的残基名称张量（整数编码）    FIXME:这里和 residue_types 的含义重复了,要删除,但是暂时也没影响,先不管
+        atom_names: 形状为 (14,) 的 atom14 标准原子名称张量（整数编码） FIXME: 这个属性没用,要删除,但是暂时也没影响,先不管
         
     Properties:
         device: 张量所在的设备
@@ -351,3 +351,111 @@ class Atom14:
         # atom14 中侧链原子位于后10个位置：CB(4) 到 位置13
         sidechain_coords = self.coords[..., 4:, :]  # (..., num_residues, 10, 3)
         return sidechain_coords 
+
+    def save(self, filepath: Union[str, Path], save_as_instance: bool = True) -> None:
+        """
+        保存 Atom14 数据到文件。
+        
+        Args:
+            filepath: 保存路径，推荐使用 .pt 扩展名
+            save_as_instance: 如果为 True，保存完整的 Atom14 实例；
+                            如果为 False，保存为字典格式
+        """
+        filepath = Path(filepath)
+        
+        if save_as_instance:
+            # 直接保存 Atom14 实例
+            torch.save(self, filepath)
+            logger.info(f"Atom14 实例已保存到: {filepath}")
+        else:
+            # 保存为字典格式
+            data_dict = {
+                'coords': self.coords,
+                'atom_mask': self.atom_mask,
+                'res_mask': self.res_mask,
+                'chain_ids': self.chain_ids,
+                'residue_types': self.residue_types,
+                'residue_indices': self.residue_indices,
+                'chain_residue_indices': self.chain_residue_indices,
+                'residue_names': self.residue_names,
+                'atom_names': self.atom_names,
+                'metadata': {
+                    'format': 'atom14_dict',
+                    'version': '1.0',
+                    'num_residues': self.num_residues,
+                    'num_chains': self.num_chains,
+                    'device': str(self.device)
+                }
+            }
+            torch.save(data_dict, filepath)
+            logger.info(f"Atom14 字典已保存到: {filepath}")
+
+    @classmethod
+    def load(cls, filepath: Union[str, Path], map_location: Optional[str] = None) -> 'Atom14':
+        """
+        从文件加载 Atom14 数据。
+        
+        Args:
+            filepath: 文件路径
+            map_location: 设备映射位置，如 'cpu', 'cuda' 等
+            
+        Returns:
+            Atom14: 加载的 Atom14 实例
+            
+        Raises:
+            ValueError: 如果文件格式不正确
+        """
+        filepath = Path(filepath)
+        if not filepath.exists():
+            raise FileNotFoundError(f"文件不存在: {filepath}")
+        
+        # 加载数据
+        data = torch.load(filepath, map_location=map_location, weights_only=False)
+        
+        # 判断是实例还是字典
+        if isinstance(data, cls):
+            # 直接是 Atom14 实例
+            logger.info(f"从 {filepath} 加载 Atom14 实例")
+            return data
+        elif isinstance(data, dict):
+            # 是字典格式，需要重构实例
+            if 'metadata' in data and data['metadata'].get('format') == 'atom14_dict':
+                # 标准的 Atom14 字典格式
+                logger.info(f"从 {filepath} 加载 Atom14 字典并重构实例")
+                return cls(
+                    coords=data['coords'],
+                    atom_mask=data['atom_mask'],
+                    res_mask=data['res_mask'],
+                    chain_ids=data['chain_ids'],
+                    residue_types=data['residue_types'],
+                    residue_indices=data['residue_indices'],
+                    chain_residue_indices=data['chain_residue_indices'],
+                    residue_names=data['residue_names'],
+                    atom_names=data['atom_names']
+                )
+            else:
+                # 尝试从通用字典格式重构
+                logger.warning(f"从 {filepath} 加载的字典格式不标准，尝试重构")
+                return cls(
+                    coords=data['coords'],
+                    atom_mask=data['atom_mask'],
+                    res_mask=data['res_mask'],
+                    chain_ids=data['chain_ids'],
+                    residue_types=data['residue_types'],
+                    residue_indices=data['residue_indices'],
+                    chain_residue_indices=data['chain_residue_indices'],
+                    residue_names=data['residue_names'],
+                    atom_names=data['atom_names']
+                )
+        else:
+            raise ValueError(f"无法识别的文件格式: {type(data)}")
+
+    def to_cif(self, output_path: Union[str, Path]) -> None:
+        """
+        将 Atom14 数据转换并保存为 CIF 文件。
+        
+        Args:
+            output_path: 输出 CIF 文件路径
+        """
+        save_atom14_to_cif(self, output_path)
+        logger.info(f"Atom14 数据已转换并保存为 CIF 文件: {output_path}")

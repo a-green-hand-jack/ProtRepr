@@ -138,6 +138,7 @@ results/
 experiments/
 checkpoints/
 models/
+*.pt
 
 # Development
 .pytest_cache/

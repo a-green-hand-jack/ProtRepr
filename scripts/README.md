@@ -20,27 +20,41 @@
 
 - 🚀 **高性能**: 支持多进程并行处理
 - 📁 **灵活输入**: 支持单文件或目录批量处理
-- 🔄 **多格式支持**: 输入支持 PDB、CIF、ENT、mmCIF；输出支持 NPZ、PyTorch PT
+- 🔄 **PyTorch 原生**: 仅支持 PyTorch PT 格式，无 NumPy 依赖
+- 💾 **格式选择**: 支持 Atom14 实例或字典格式保存
 - 📊 **详细统计**: 提供完整的转换统计和错误报告
 - 🎯 **精确控制**: 可配置设备、工作进程数、目录结构保持等
 
 #### 基本用法
 
 ```bash
-# 转换单个文件
+# 转换单个文件 (保存为 Atom14 实例)
 python batch_pdb_to_atom14.py protein.pdb output_dir
+
+# 保存为字典格式
+python batch_pdb_to_atom14.py protein.pdb output_dir --save-as-dict
 
 # 批量转换目录中的所有结构文件
 python batch_pdb_to_atom14.py /path/to/pdb_files /path/to/output
 
 # 使用多进程加速处理
-python batch_pdb_to_atom14.py /data/proteins /data/atom14 --workers 8
-
-# 输出为 PyTorch 格式
-python batch_pdb_to_atom14.py input.cif output_dir --format pt
+python batch_pdb_to_atom14.py /path/to/pdb_files /path/to/output --workers 8
 
 # 保存转换统计信息
 python batch_pdb_to_atom14.py proteins/ output/ --save-stats stats.json
+```
+
+#### 新特性示例 (v2.0)
+
+```bash
+# 保存为 Atom14 实例 (默认，推荐用于直接加载使用)
+python batch_pdb_to_atom14.py /data/proteins /data/atom14_instances
+
+# 保存为字典格式 (与旧版本兼容)
+python batch_pdb_to_atom14.py /data/proteins /data/atom14_dicts --save-as-dict
+
+# 结合并行处理和字典格式
+python batch_pdb_to_atom14.py /data/proteins /data/output --workers 8 --save-as-dict
 ```
 
 #### 高级选项
@@ -48,33 +62,58 @@ python batch_pdb_to_atom14.py proteins/ output/ --save-stats stats.json
 - `--workers, -w`: 并行工作进程数（默认：CPU核心数的一半）
 - `--no-preserve-structure`: 不保持目录结构，所有输出文件放在同一目录
 - `--device`: 计算设备（`cpu` 或 `cuda`）
-- `--format, -f`: 输出格式（`npz` 或 `pt`）
+- `--save-as-dict`: 保存为字典格式而非 Atom14 实例
 - `--save-stats`: 保存详细统计信息到 JSON 文件
 - `--verbose, -v`: 详细输出模式
 
 #### 输出数据结构
 
-**NPZ 格式** (推荐用于数据存储):
+**Atom14 实例格式** (默认，推荐):
 ```python
-data = np.load("output.npz")
-# 包含: coords, atom_mask, res_mask, chain_ids, residue_types,
-#      residue_indices, chain_residue_indices, residue_names, 
-#      atom_names, num_residues, num_chains
+# 直接加载和使用
+from protrepr.core.atom14 import Atom14
+atom14 = Atom14.load("output.pt")
+
+# 访问属性
+print(f"残基数: {atom14.num_residues}")
+print(f"坐标形状: {atom14.coords.shape}")
+
+# 转换为 CIF 文件验证
+atom14.to_cif("verify.cif")
 ```
 
-**PyTorch 格式** (推荐用于模型训练):
+**字典格式** (与旧版本兼容):
 ```python
+import torch
 data = torch.load("output.pt")
-# 包含上述所有数据 + metadata 字典
-metadata = data['metadata']  # 格式版本、设备信息等
+
+# 数据字段
+coords = data['coords']          # (num_residues, 14, 3)
+atom_mask = data['atom_mask']    # (num_residues, 14)
+res_mask = data['res_mask']      # (num_residues,)
+# ... 其他字段
+metadata = data['metadata']      # 包含格式版本、设备信息等
+
+# 重构为 Atom14 实例
+from protrepr.core.atom14 import Atom14
+atom14 = Atom14.load("output.pt")  # 自动识别格式
 ```
 
 #### 性能优化建议
 
-1. **并行处理**: 对于大量文件，使用 `--workers` 参数
-2. **设备选择**: 如有 GPU，使用 `--device cuda` 
-3. **格式选择**: NPZ 格式文件更小，PT 格式加载更快
+1. **保存格式选择**: 
+   - 实例格式：更快的加载速度，直接可用的 API
+   - 字典格式：更好的版本兼容性，更小的文件尺寸
+2. **并行处理**: 对于大量文件，使用 `--workers` 参数
+3. **设备选择**: 如有 GPU，使用 `--device cuda`
 4. **内存管理**: 处理超大蛋白质时，减少工作进程数
+
+#### 版本变更 (v2.0)
+
+- ✅ **新增**: `--save-as-dict` 参数控制保存格式
+- ✅ **简化**: 移除 NPZ 格式支持，专注 PyTorch 生态
+- ✅ **优化**: 使用 `Atom14.save()` 方法，统一保存逻辑
+- ✅ **增强**: 默认保存完整 Atom14 实例，提供更好的用户体验
 
 #### 错误处理
 
@@ -89,6 +128,32 @@ metadata = data['metadata']  # 格式版本、设备信息等
 - **CUDA 错误**: 检查 GPU 可用性，或回退到 CPU
 - **文件权限**: 确保对输入文件有读权限，对输出目录有写权限
 - **依赖问题**: 确保 `protein-tensor` 库正确安装
+- **格式兼容**: 旧版本生成的字典格式可以正常加载为 Atom14 实例
+
+#### 完整使用示例
+
+```bash
+# 1. 基本转换 (推荐)
+python scripts/batch_pdb_to_atom14.py /tests/data /tests/atom14_e2e 
+
+# 2. 高性能批量处理
+python scripts/batch_pdb_to_atom14.py /data/large_dataset /data/output \
+    --workers 16 \
+    --device cpu \
+    --save-stats processing_stats.json
+
+# 3. 兼容模式 (字典格式)
+python scripts/batch_pdb_to_atom14.py /data/proteins /data/legacy_output \
+    --save-as-dict \
+    --no-preserve-structure
+
+# 4. 验证工作流
+python scripts/batch_pdb_to_atom14.py sample.pdb output/ --verbose
+# 然后使用 Python 加载和验证：
+# >>> from protrepr.core.atom14 import Atom14
+# >>> atom14 = Atom14.load("output/sample.pt")
+# >>> atom14.to_cif("verification.cif")
+```
 
 ## 开发指南
 
