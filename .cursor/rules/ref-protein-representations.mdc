@@ -1,0 +1,54 @@
+---
+description: "定义 ProtRepr 项目中需要实现的核心蛋白质表示方案，包括 atom37, atom14, 和 frame (刚体变换)。"
+globs: ["**"]
+alwaysApply: true
+---
+
+# 核心蛋白质表示方案 (Protein Representations)
+
+本文件定义了 `ProtRepr` 项目旨在支持的三种核心蛋白质三维结构表示方法。这些表示法是当前蛋白质深度学习领域（尤其是 AlphaFold 及其衍生模型）的基础。在 `ProtRepr` 中，我们的目标是基于 `ProteinTensor` 提供的基础数据，高效地计算、转换和输出这些表示。
+
+所有表示的计算都应遵循 **PyTorch-native** 的原则，直接在 GPU 上完成，以避免不必要的数据传输开销。
+
+---
+
+## 1. `atom37` 表示法 (Residue Heavy-Atom Representation)
+
+- **来源**: 主要源自 AlphaFold，作为其主干网络 (Evoformer) 和结构模块的输入。在 `ProtPardelle` 等项目中也有应用。
+- **描述**: 一种基于残基的、固定大小的原子表示法。对于蛋白质中的每一个残基，它都用一个 `(37, 3)` 的坐标张量来表示其所有重原子（非氢原子）的位置。
+    - 37 个原子槽位是预先定义好的，涵盖了20种标准氨基酸可能出现的所有重原子。
+    - 如果某个残基的重原子数少于37，剩余的槽位将用零向量或特定的掩码 (mask) 进行填充。
+    - 这种表示法将可变长度的残基侧链统一为固定尺寸的张量，便于深度学习模型进行批处理。
+- **`ProtRepr` 实现目标**:
+    - 提供一个函数或 `EnhancedProteinTensor` 的方法，能够从原始坐标（`ProteinTensor.coordinates`）高效地计算出 `(num_residues, 37, 3)` 的 `atom37` 坐标张量。
+    - 同时生成一个 `(num_residues, 37)` 的 `atom37_mask` 张量，用于标识哪些原子是真实存在的，哪些是填充的。
+
+---
+
+## 2. `atom14` 表示法 (Reduced Atom Representation)
+
+- **来源**: 同样广泛应用于 AlphaFold（如 `Pallatom` 所述），尤其是在其输入特征工程和回收 (recycling) 阶段。
+- **描述**: `atom37` 的一个紧凑版本。每个残基用一个 `(14, 3)` 的坐标张量表示。
+    - 这14个槽位通常包括主链原子（N, Cα, C, O）、一个虚拟的CB原子（对于甘氨酸），以及最多9个侧链原子。
+    - 相比 `atom37`，`atom14` 更节省内存，但仍然保留了计算二面角等几何特征所需的关键原子。
+- **`ProtRepr` 实现目标**:
+    - 实现从 `ProteinTensor` 到 `(num_residues, 14, 3)` 的 `atom14` 坐标张量的转换逻辑。
+    - 生成相应的 `(num_residues, 14)` 的 `atom14_mask`。
+    - 确保原子到槽位的映射关系与标准实现（如 OpenFold 或 AlphaFold）保持一致。
+
+---
+
+## 3. `frame` 表示法 (Per-Residue Rigid Body Frames)
+
+- **来源**: SE(3)-equivariant 网络的核心概念，如 `protein-frame-flow`、`AlphaFold` 的结构模块和 `Equiformer` 等。
+- **描述**: 为每个残基定义一个局部的刚体坐标系 (frame)。这个坐标系由两部分组成：
+    - **平移 (Translation)**: 一个 `(3,)` 的向量，通常是该残基 C-alpha (Cα) 原子的坐标。
+    - **旋转 (Rotation)**: 一个 `(3, 3)` 的旋转矩阵，描述了该残基相对于全局坐标系的方向。这个旋转矩阵通常由主链上的三个原子（如 N, Cα, C）通过 Gram-Schmidt 正交化过程计算得出。
+- **`ProtRepr` 实现目标**:
+    - 实现一个高效的、可微分的函数，用于从主链原子坐标计算出每个残基的刚体变换。
+    - 输出应为一个包含平移和旋转的元组或字典，例如 `(translations, rotations)`，其形状分别为 `(num_residues, 3)` 和 `(num_residues, 3, 3)`。
+    - 该计算过程必须是 PyTorch-native 的，以便与需要 SE(3) 等变性的网络（如 IPA 模块）无缝集成。
+description:
+globs:
+alwaysApply: false
+---

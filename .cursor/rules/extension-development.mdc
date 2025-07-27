@@ -1,0 +1,56 @@
+---
+description: "ProtRepr 项目的核心开发指南。该项目基于 ProteinTensor 进行二次开发，专注于面向深度学习的蛋白质结构表示与建模。"
+globs: ["**"]
+alwaysApply: true
+---
+
+# 项目开发指南: ProtRepr
+
+## 1. 项目定位与核心目标
+
+本项 (ProtRepr) 是一个基于开源库 [`ProteinTensor`](https://github.com/a-green-hand-jack/ProteinTensor) 的二次开发项目。
+
+**核心目标**: 充分利用 `ProteinTensor` 提供的蛋白质结构到张量的转换能力，构建一个专注于蛋白质表示学习、结构预测和功能分析的深度学习研究与应用框架。所有开发工作都应围绕如何更高效地将蛋白质结构数据与 PyTorch 生态中的先进模型（如 GNNs, Transformers, SE(3)-Equivariant Networks）相结合。
+
+## 2. 关键技术选型与核心约束
+
+### **强制后端：必须使用 PyTorch**
+
+为了确保与深度学习工作流的无缝集成和最高性能，本项目中的所有 `ProteinTensor` 相关操作 **必须** 显式指定 `torch` 作为其后端。任何使用 `numpy` 后端的代码提交都应被视为不符合规范。
+
+**正确用法示例:**
+
+```python
+from protein_tensor import ProteinTensor, load_structure
+import torch
+
+# 从结构文件加载时，必须立即指定 PyTorch 后端
+protein_pt: ProteinTensor = load_structure(
+    "path/to/protein.pdb",
+    backend='torch'
+)
+
+# 验证其核心数据是否为 torch.Tensor
+assert isinstance(protein_pt.coordinates, torch.Tensor), \
+    "蛋白质坐标必须是 PyTorch Tensor 类型！"
+
+# 在进行数据转换时，同样使用 to_torch()
+torch_data: dict[str, torch.Tensor | dict] = protein_pt.to_torch()
+```
+
+此约束是项目的基本原则，旨在避免在模型训练流程中出现不必要的 CPU/GPU 数据传输和类型转换开销。
+
+## 5. 代码质量与规范
+
+所有代码产出都必须严格遵守您在全局规则中定义的 **Python 技术专家与架构师** 角色规范。这包括但不限于：
+
+*   **全面类型注解**: 100% 的函数和方法参数及返回值。
+*   **Google 风格 Docstrings**: 清晰的文档说明。
+*   **`logging` 替代 `print`**: 专业级的日志记录。
+*   **`pathlib` 用于路径操作**: 保证跨平台兼容性。
+*   **模块化与单一职责**: 编写可维护、可测试的代码。
+*   **`pytest` 单元测试**: 为 `src/` 目录下的所有核心功能编写测试。
+description:
+globs:
+alwaysApply: false
+---
