@@ -1,0 +1,25 @@
+# 忽略集成测试生成的结果文件
+test_results/
+batch_results/
+temp_input/
+
+# 忽略各种输出格式文件
+*.npz
+*.pt
+*.cif
+*.pdb
+
+# 忽略统计和日志文件
+*.json
+*.log
+
+# 忽略 Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 忽略临时文件
+tmp/
+temp/
+.tmp*
+.temp* 

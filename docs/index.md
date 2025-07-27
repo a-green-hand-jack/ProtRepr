@@ -20,12 +20,23 @@ ProtRepr 是一个专注于蛋白质表示学习、结构预测和功能分析�
 - **强制 PyTorch 后端**: 确保与深度学习工作流的无缝集成
 - **高性能**: 优化的张量操作，支持批处理和自动微分
 - **可扩展**: 模块化设计，易于集成新的表示方法
+- **完整测试**: 端到端集成测试，100% 功能覆盖，确保产品质量
 
 ## 📖 文档导航
 
+### 用户指南
 - [使用指南](usage.md) - 详细的使用说明和API文档
+- [快速开始教程](quickstart.md) - 5分钟快速上手
+
+### 开发指南
 - [开发指南](development.md) - 开发环境设置和贡献指南
 - [API 参考](api/index.md) - 完整的API文档
+
+### 测试与质量
+- [测试运行指南](testing_guide.md) - 如何运行和理解测试 🔥
+- [Atom14 集成测试报告](atom14_integration_test_report.md) - 完整的端到端测试验证
+- [测试完成总结](atom14_testing_completion_summary.md) - 测试体系建设总结
+- [性能基准测试](tensor_optimization_summary.md) - 性能优化和基准测试
 
 ## 🚀 快速开始
 
