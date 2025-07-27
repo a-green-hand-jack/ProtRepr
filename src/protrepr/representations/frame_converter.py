@@ -248,16 +248,17 @@ def extract_backbone_atoms_vectorized(
         residue_atom_types = atom_types[start_atom:end_atom]
         residue_coords = coordinates[start_atom:end_atom]
         
-        # 查找主链原子
+        # 为该残基查找主链原子，使用更严格的匹配
+        backbone_found = {0: False, 1: False, 2: False, 3: False}  # N, CA, C, O
+        
         for local_atom_idx, atom_type_idx in enumerate(residue_atom_types):
-            atom_type_idx = atom_type_idx.item()
+            atom_type_int = int(atom_type_idx.item())
             
-            # 根据原子类型映射到主链位置
-            # 注意：这里假设原子类型编码与主链原子位置对应
-            # N=0, CA=1, C=2, O=3
-            if 0 <= atom_type_idx <= 3:
-                backbone_coords[res_idx, int(atom_type_idx)] = residue_coords[local_atom_idx]
-                backbone_mask[res_idx, int(atom_type_idx)] = True
+            # 只接受标准主链原子类型 (N=0, CA=1, C=2, O=3)
+            if atom_type_int in backbone_found and not backbone_found[atom_type_int]:
+                backbone_coords[res_idx, atom_type_int] = residue_coords[local_atom_idx]
+                backbone_mask[res_idx, atom_type_int] = True
+                backbone_found[atom_type_int] = True
     
     return backbone_coords, backbone_mask
 
@@ -344,24 +345,41 @@ def protein_tensor_to_frame(
     residue_names_list = []
     res_mask = torch.zeros(num_residues, dtype=torch.bool, device=device)
     
+    # 统计数据用于调试
+    total_residues = num_residues
+    valid_residues = 0
+    missing_backbone_count = 0
+    
     for res_idx in range(num_residues):
         res_type_idx = residue_type_indices[res_idx].item()
         
         # 检查是否有足够的主链原子 (至少需要 N, CA, C)
-        has_backbone = (
-            backbone_mask[res_idx, 0] and  # N
-            backbone_mask[res_idx, 1] and  # CA  
-            backbone_mask[res_idx, 2]      # C
-        )
+        has_n = backbone_mask[res_idx, 0]   # N
+        has_ca = backbone_mask[res_idx, 1]  # CA  
+        has_c = backbone_mask[res_idx, 2]   # C
+        has_backbone = has_n and has_ca and has_c
+        
+        # 如果有主链原子但不完整，记录警告
+        if not has_backbone and (has_n or has_ca or has_c):
+            missing_atoms = []
+            if not has_n: missing_atoms.append("N")
+            if not has_ca: missing_atoms.append("CA")
+            if not has_c: missing_atoms.append("C")
+            logger.debug(f"残基 {res_idx} 缺少主链原子: {missing_atoms}")
+            missing_backbone_count += 1
         
         if res_type_idx in IDX_TO_RESIDUE_NAME and has_backbone:
             res_name = IDX_TO_RESIDUE_NAME[res_type_idx]
             res_mask[res_idx] = True
+            valid_residues += 1
         else:
             res_name = "UNK"
             res_mask[res_idx] = False
             
         residue_names_list.append(res_name)
+    
+    # 输出统计信息
+    logger.info(f"残基过滤统计: {valid_residues}/{total_residues} 有效残基, {missing_backbone_count} 个残基缺少主链原子")
     
     # 计算刚体变换
     from ..utils.geometry import compute_rigid_transforms_from_backbone
@@ -371,9 +389,31 @@ def protein_tensor_to_frame(
     ca_coords = backbone_coords[:, 1, :]  # CA 原子
     c_coords = backbone_coords[:, 2, :]   # C 原子
     
-    translations, rotations = compute_rigid_transforms_from_backbone(
-        n_coords, ca_coords, c_coords
+    # 过滤：只对有完整主链原子的残基计算刚体变换
+    valid_indices = torch.where(res_mask)[0]
+    
+    if len(valid_indices) == 0:
+        logger.error("没有找到任何有完整主链原子的残基")
+        raise ValueError("没有找到有效的残基用于Frame转换")
+    
+    # 只对有效残基计算刚体变换
+    valid_n_coords = n_coords[res_mask]
+    valid_ca_coords = ca_coords[res_mask]
+    valid_c_coords = c_coords[res_mask]
+    
+    logger.info(f"对 {len(valid_indices)}/{num_residues} 个有效残基计算刚体变换")
+    
+    # 计算刚体变换
+    valid_translations, valid_rotations = compute_rigid_transforms_from_backbone(
+        valid_n_coords, valid_ca_coords, valid_c_coords
     )
+    
+    # 将结果填回完整的张量中
+    translations = torch.zeros(num_residues, 3, device=device)
+    rotations = torch.eye(3, device=device).unsqueeze(0).repeat(num_residues, 1, 1)
+    
+    translations[res_mask] = valid_translations
+    rotations[res_mask] = valid_rotations
     
     # 创建张量化的残基名称
     residue_names_tensor = create_residue_name_tensor(residue_names_list, device)

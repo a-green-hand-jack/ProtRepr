@@ -265,8 +265,47 @@ def compute_rigid_transforms_from_backbone(
     # 3. 使用 Gram-Schmidt 正交化构建旋转矩阵
     rotations = gram_schmidt_orthogonalization(ca_to_c, ca_to_n, eps=eps)
     
-    # 4. 验证旋转矩阵的有效性
-    validate_rotation_matrix(rotations, eps=1e-4)
+    # 4. 验证旋转矩阵的有效性，但对问题残基给出更详细的诊断信息
+    try:
+        validate_rotation_matrix(rotations, eps=1e-4)
+    except ValueError as e:
+        # 如果验证失败，提供更详细的诊断信息
+        logger.error(f"旋转矩阵验证失败: {e}")
+        
+        # 找出有问题的残基
+        det_values = torch.det(rotations)
+        problematic_residues = torch.where(torch.abs(det_values - 1.0) > 1e-4)[0]
+        
+        if len(problematic_residues) > 0:
+            logger.error(f"问题残基索引: {problematic_residues[:10].tolist()}...")  # 最多显示前10个
+            
+            # 详细分析前几个问题残基
+            for i, res_idx in enumerate(problematic_residues[:3]):  # 只分析前3个
+                res_idx_int = int(res_idx.item())
+                logger.error(f"残基 {res_idx_int}: 行列式 = {det_values[res_idx].item():.6f}")
+                
+                # 检查输入向量
+                n_coord = n_coords[res_idx_int]
+                ca_coord = ca_coords[res_idx_int]
+                c_coord = c_coords[res_idx_int]
+                
+                ca_n_vec = n_coord - ca_coord
+                ca_c_vec = c_coord - ca_coord
+                
+                ca_n_len = torch.norm(ca_n_vec).item()
+                ca_c_len = torch.norm(ca_c_vec).item()
+                
+                logger.error(f"  CA-N 向量长度: {ca_n_len:.6f}")
+                logger.error(f"  CA-C 向量长度: {ca_c_len:.6f}")
+                
+                if ca_n_len > 0 and ca_c_len > 0:
+                    dot_product = torch.dot(ca_n_vec, ca_c_vec) / (ca_n_len * ca_c_len)
+                    dot_product = torch.clamp(dot_product, -1.0, 1.0)  # 避免数值误差
+                    angle_rad = torch.acos(dot_product)
+                    angle_deg = torch.rad2deg(angle_rad).item()
+                    logger.error(f"  CA-N 与 CA-C 夹角: {angle_deg:.2f}°")
+        
+        raise  # 重新抛出异常
     
     return translations, rotations
 
