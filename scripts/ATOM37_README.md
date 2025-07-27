@@ -8,10 +8,11 @@ Atom37 是基于 AlphaFold 标准的蛋白质重原子表示法，为每个残�
 
 - **📊 固定槽位设计**: 37 个预定义的原子位置，支持所有标准氨基酸
 - **🚀 PyTorch 原生**: 完全基于 PyTorch 张量，支持 GPU 加速
-- **🔄 双向转换**: ProteinTensor ↔ Atom37 无缝转换
+- **🔄 双向转换**: ProteinTensor ↔ Atom37 无缝转换，支持 CIF/PDB 导出
 - **📦 批量支持**: 天然支持任意批量维度 (..., num_residues, 37, 3)
 - **⚡ 高性能**: 向量化操作，避免 Python 循环
 - **🧪 完整测试**: 全面的单元测试和端到端集成测试
+- **🔗 工具链完整**: 从结构文件到表示格式再到可视化的完整工作流
 
 ## 项目结构
 
@@ -22,10 +23,12 @@ src/protrepr/
 ├── representations/
 │   └── atom37_converter.py          # 转换函数和映射定义
 └── batch_processing/
-    └── atom37_batch_converter.py    # 批量处理工具
+    ├── atom37_batch_converter.py    # PDB/CIF → Atom37 批量转换器
+    └── atom37_to_cif_converter.py   # Atom37 → CIF/PDB 批量转换器
 
 scripts/
-└── batch_pdb_to_atom37.py          # 批量转换脚本
+├── batch_pdb_to_atom37.py          # PDB/CIF → Atom37 批量转换脚本
+└── batch_atom37_to_cif.py          # Atom37 → CIF/PDB 批量转换脚本
 
 tests/
 ├── test_representations/
@@ -318,6 +321,114 @@ python scripts/batch_pdb_to_atom37.py /path/to/pdb_files /path/to/output \
 
 ```bash
 python scripts/batch_pdb_to_atom37.py tests/data/ tests/atom37/atom37_e2e
+```
+
+### 反向转换工具
+
+#### `batch_atom37_to_cif.py`
+
+批量将 ProtRepr Atom37 格式文件转换为 CIF 或 PDB 结构文件的反向转换工具。
+
+**核心实现**: `src/protrepr/batch_processing/atom37_to_cif_converter.py`
+
+##### 功能特性
+
+- 🔄 **反向转换**: 将 Atom37 PT 文件转换回可视化的结构文件
+- 📁 **多格式支持**: 输出 CIF 或 PDB 格式
+- 🚀 **高性能**: 支持多进程并行处理
+- 📊 **详细统计**: 提供完整的转换统计和错误报告
+- 🎯 **精确控制**: 可配置工作进程数、目录结构保持等
+
+##### 基本用法
+
+```bash
+# 转换为 CIF 格式 (默认)
+python batch_atom37_to_cif.py /path/to/atom37_files /path/to/output
+
+# 转换为 PDB 格式
+python batch_atom37_to_cif.py /path/to/atom37_files /path/to/output --format pdb
+
+# 批量转换目录中的所有 Atom37 文件
+python batch_atom37_to_cif.py /data/atom37_pt_files /data/cif_output
+
+# 使用多进程加速处理
+python batch_atom37_to_cif.py /data/atom37_files /data/output --workers 8
+
+# 保存转换统计信息
+python batch_atom37_to_cif.py atom37_files/ cif_output/ --save-stats reverse_stats.json
+```
+
+##### 高级选项
+
+- `--format, -f`: 输出格式（`cif` 或 `pdb`，默认：`cif`）
+- `--workers, -w`: 并行工作进程数（默认：CPU核心数的一半）
+- `--no-preserve-structure`: 不保持目录结构，所有输出文件放在同一目录
+- `--save-stats`: 保存详细统计信息到 JSON 文件
+- `--verbose, -v`: 详细输出模式
+
+##### 使用场景
+
+1. **AlphaFold 输出可视化**: 将 AlphaFold 风格的预测结果转换为标准结构文件
+2. **质量检查**: 验证 Atom37 数据的完整性和正确性
+3. **数据交换**: 与其他结构生物学工具进行数据交换
+4. **发布共享**: 将研究结果转换为标准格式供社区使用
+
+##### 完整使用示例
+
+```bash
+# 1. 基本反向转换 (CIF 格式，适合发布)
+python scripts/batch_atom37_to_cif.py /data/atom37_files /data/cif_output
+
+# 2. 转换为 PDB 格式用于 PyMOL 可视化
+python scripts/batch_atom37_to_cif.py /results/atom37 /results/visualization \
+    --format pdb \
+    --workers 8
+
+# 3. 验证 AlphaFold 兼容性
+python scripts/batch_atom37_to_cif.py alphafold_predictions.pt validation_output/ \
+    --format cif \
+    --verbose \
+    --save-stats alphafold_validation.json
+
+# 4. 批量发布结构预测结果
+python scripts/batch_atom37_to_cif.py /experiments/atom37_predictions /publish/structures \
+    --format cif \
+    --no-preserve-structure
+```
+
+##### 与 Atom14 的差异
+
+| 特性 | Atom37 反向转换 | Atom14 反向转换 |
+|------|----------------|----------------|
+| 信息完整性 | 完整的重原子信息 | 基本原子信息 |
+| AlphaFold 兼容性 | 完全兼容 | 部分兼容 |
+| 文件大小 | 较大 | 较小 |
+| 可视化质量 | 最高质量 | 良好质量 |
+| 处理速度 | 较慢 | 较快 |
+
+##### 输出验证
+
+```bash
+# 使用 PyMOL 验证结构质量
+pymol output.cif
+# 在 PyMOL 中运行: show cartoon; color rainbow
+
+# 使用 ChimeraX 进行高质量可视化
+chimerax output.pdb
+
+# 验证与原始结构的一致性
+python -c "
+from protein_tensor import load_structure
+from protrepr.core.atom37 import Atom37
+
+# 加载重构的结构
+reconstructed = load_structure('output.cif')
+print(f'重构结构 - 残基数: {reconstructed.n_residues}, 原子数: {reconstructed.n_atoms}')
+
+# 与原始 Atom37 比较
+original = Atom37.load('original.pt')
+print(f'原始 Atom37 - 残基数: {original.num_residues}')
+"
 ```
 
 ### 数据格式

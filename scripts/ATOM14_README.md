@@ -7,6 +7,7 @@
 - **轻量包装器**: 脚本文件只负责命令行参数解析和用户界面，核心实现位于 `src/protrepr/` 中
 - **简洁易用**: 提供直观的命令行接口，支持常见的数据处理任务
 - **模块化**: 每个脚本专注于一个特定的功能
+- **双向转换**: 支持正向转换（PDB/CIF → Atom14/Atom37）和反向转换（Atom14/Atom37 → CIF/PDB）
 
 ## 可用工具
 
@@ -153,6 +154,97 @@ python scripts/batch_pdb_to_atom14.py sample.pdb output/ --verbose
 # >>> from protrepr.core.atom14 import Atom14
 # >>> atom14 = Atom14.load("output/sample.pt")
 # >>> atom14.to_cif("verification.cif")
+```
+
+### `batch_atom14_to_cif.py` (新增)
+
+批量将 ProtRepr Atom14 格式文件转换为 CIF 或 PDB 结构文件的反向转换工具。
+
+**核心实现**: `src/protrepr/batch_processing/atom14_to_cif_converter.py`
+
+#### 功能特性
+
+- 🔄 **反向转换**: 将 Atom14 PT 文件转换回可视化的结构文件
+- 📁 **多格式支持**: 输出 CIF 或 PDB 格式
+- 🚀 **高性能**: 支持多进程并行处理
+- 📊 **详细统计**: 提供完整的转换统计和错误报告
+- 🎯 **精确控制**: 可配置工作进程数、目录结构保持等
+
+#### 基本用法
+
+```bash
+# 转换为 CIF 格式 (默认)
+python batch_atom14_to_cif.py /path/to/atom14_files /path/to/output
+
+# 转换为 PDB 格式
+python batch_atom14_to_cif.py /path/to/atom14_files /path/to/output --format pdb
+
+# 批量转换目录中的所有 Atom14 文件
+python batch_atom14_to_cif.py /data/atom14_pt_files /data/cif_output
+
+# 使用多进程加速处理
+python batch_atom14_to_cif.py /data/atom14_files /data/output --workers 8
+
+# 保存转换统计信息
+python batch_atom14_to_cif.py atom14_files/ cif_output/ --save-stats reverse_stats.json
+```
+
+#### 高级选项
+
+- `--format, -f`: 输出格式（`cif` 或 `pdb`，默认：`cif`）
+- `--workers, -w`: 并行工作进程数（默认：CPU核心数的一半）
+- `--no-preserve-structure`: 不保持目录结构，所有输出文件放在同一目录
+- `--save-stats`: 保存详细统计信息到 JSON 文件
+- `--verbose, -v`: 详细输出模式
+
+#### 使用场景
+
+1. **结果可视化**: 将训练好的模型输出转换为可在 PyMOL/ChimeraX 中查看的格式
+2. **质量检查**: 验证 Atom14 数据的完整性和正确性
+3. **数据交换**: 与其他不支持 Atom14 格式的工具进行数据交换
+4. **发布共享**: 将研究结果转换为标准格式供他人使用
+
+#### 完整使用示例
+
+```bash
+# 1. 基本反向转换 (CIF 格式)
+python scripts/batch_atom14_to_cif.py /data/atom14_files /data/cif_output
+
+# 2. 转换为 PDB 格式用于可视化
+python scripts/batch_atom14_to_cif.py /results/atom14 /results/visualization \
+    --format pdb \
+    --workers 8
+
+# 3. 完整工作流验证
+python scripts/batch_atom14_to_cif.py atom14_sample.pt verification_output/ \
+    --format cif \
+    --verbose \
+    --save-stats verification_stats.json
+
+# 4. 批量处理实验结果
+python scripts/batch_atom14_to_cif.py /experiments/atom14_predictions /publish/structures \
+    --format cif \
+    --no-preserve-structure
+```
+
+#### 输出验证
+
+转换完成后，可以使用以下方式验证输出：
+
+```bash
+# 使用 PyMOL 查看 CIF 文件
+pymol output.cif
+
+# 使用 ChimeraX 查看 PDB 文件
+chimerax output.pdb
+
+# 或者使用 Python 验证
+python -c "
+from protein_tensor import load_structure
+protein = load_structure('output.cif')
+print(f'残基数: {protein.n_residues}')
+print(f'原子数: {protein.n_atoms}')
+"
 ```
 
 ## 开发指南
