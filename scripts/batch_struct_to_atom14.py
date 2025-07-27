@@ -1,28 +1,31 @@
 #!/usr/bin/env python3
 """
-批量 PDB/CIF 到 Frame 转换脚本
+批量结构文件到 Atom14 转换脚本
 
-这个脚本提供命令行接口，用于批量将 PDB/CIF 文件转换为 ProtRepr 的 Frame 格式。
+这个脚本提供命令行接口，用于批量将结构文件（PDB/CIF/ENT/MMCIF）转换为 ProtRepr 的 Atom14 格式。
 核心实现位于 protrepr.batch_processing 模块中。
 
+支持的输入格式: .pdb, .cif, .ent, .mmcif
+输出格式: .pt (PyTorch 格式)
+
 使用方法:
-    python batch_pdb_to_frame.py input_dir output_dir [options]
+    python batch_struct_to_atom14.py input_dir output_dir [options]
 
 示例:
-    # 基本用法 (保存为 Frame 实例)
-    python batch_pdb_to_frame.py /path/to/pdb_files /path/to/output
+    # 基本用法 (保存为 Atom14 实例)
+    python batch_struct_to_atom14.py /path/to/structure_files /path/to/output
     
     # 保存为字典格式
-    python batch_pdb_to_frame.py /path/to/pdb_files /path/to/output --save-as-dict
+    python batch_struct_to_atom14.py /path/to/structure_files /path/to/output --save-as-dict
     
     # 使用并行处理
-    python batch_pdb_to_frame.py /path/to/pdb_files /path/to/output --workers 8
+    python batch_struct_to_atom14.py /path/to/structure_files /path/to/output --workers 8
     
     # 不保持目录结构
-    python batch_pdb_to_frame.py /path/to/pdb_files /path/to/output --no-preserve-structure
+    python batch_struct_to_atom14.py /path/to/structure_files /path/to/output --no-preserve-structure
     
     # 指定设备
-    python batch_pdb_to_frame.py /path/to/pdb_files /path/to/output --device cuda
+    python batch_struct_to_atom14.py /path/to/structure_files /path/to/output --device cuda
 """
 
 import sys
@@ -36,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import torch
 from protrepr.batch_processing import (
-    BatchPDBToFrameConverter,
+    BatchPDBToAtom14Converter,
     save_statistics
 )
 
@@ -52,12 +55,12 @@ logger = logging.getLogger(__name__)
 def main():
     """主函数。"""
     parser = argparse.ArgumentParser(
-        description="批量将 PDB/CIF 文件转换为 ProtRepr Frame 格式",
+        description="批量将结构文件（PDB/CIF/ENT/MMCIF）转换为 ProtRepr Atom14 格式",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  %(prog)s /data/pdb_files /data/frame_output
-  %(prog)s /data/pdb_files /data/frame_output --workers 8 --save-as-dict
+  %(prog)s /data/structure_files /data/atom14_output
+  %(prog)s /data/structure_files /data/atom14_output --workers 8 --save-as-dict
   %(prog)s input.pdb output_dir --no-preserve-structure --device cuda
         """
     )
@@ -65,7 +68,7 @@ def main():
     parser.add_argument(
         'input_path',
         type=Path,
-        help='输入文件或目录路径'
+        help='输入结构文件或目录路径（支持 PDB/CIF/ENT/MMCIF 格式）'
     )
     
     parser.add_argument(
@@ -104,7 +107,7 @@ def main():
     parser.add_argument(
         '--save-as-dict',
         action='store_true',
-        help='保存为字典格式而非 Frame 实例 (默认: 保存为实例)'
+        help='保存为字典格式而非 Atom14 实例 (默认: 保存为实例)'
     )
     
     parser.add_argument(
@@ -137,7 +140,7 @@ def main():
     
     try:
         # 创建转换器
-        converter = BatchPDBToFrameConverter(
+        converter = BatchPDBToAtom14Converter(
             n_workers=args.workers,
             preserve_structure=not args.no_preserve_structure,
             device=args.device,
@@ -146,7 +149,7 @@ def main():
         
         # 执行批量转换
         logger.info(f"开始批量转换: {args.input_path} -> {args.output_dir}")
-        save_format = "字典格式" if args.save_as_dict else "Frame实例"
+        save_format = "字典格式" if args.save_as_dict else "Atom14实例"
         logger.info(f"保存格式: {save_format}")
         
         start_time = time.perf_counter()

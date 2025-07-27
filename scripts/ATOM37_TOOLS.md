@@ -27,8 +27,8 @@ src/protrepr/
     └── atom37_to_cif_converter.py   # Atom37 → CIF/PDB 批量转换器
 
 scripts/
-├── batch_pdb_to_atom37.py          # PDB/CIF → Atom37 批量转换脚本
-└── batch_atom37_to_cif.py          # Atom37 → CIF/PDB 批量转换脚本
+├── batch_struct_to_atom37.py       # 结构文件 → Atom37 批量转换脚本
+└── batch_atom37_to_struct.py       # Atom37 → 结构文件 批量转换脚本
 
 tests/
 ├── test_representations/
@@ -301,33 +301,33 @@ print(f"转换失败: {statistics['failed']} 个文件")
 
 ```bash
 # 基本用法 (保存为 Atom37 实例)
-python scripts/batch_pdb_to_atom37.py /path/to/pdb_files /path/to/output
+python scripts/batch_struct_to_atom37.py /path/to/structure_files /path/to/output
 
 # 保存为字典格式
-python scripts/batch_pdb_to_atom37.py /path/to/pdb_files /path/to/output --save-as-dict
+python scripts/batch_struct_to_atom37.py /path/to/structure_files /path/to/output --save-as-dict
 
 # 使用并行处理
-python scripts/batch_pdb_to_atom37.py /path/to/pdb_files /path/to/output --workers 8
+python scripts/batch_struct_to_atom37.py /path/to/structure_files /path/to/output --workers 8
 
 # 使用 GPU 加速
-python scripts/batch_pdb_to_atom37.py /path/to/pdb_files /path/to/output --device cuda
+python scripts/batch_struct_to_atom37.py /path/to/structure_files /path/to/output --device cuda
 
 # 保存统计信息
-python scripts/batch_pdb_to_atom37.py /path/to/pdb_files /path/to/output \
+python scripts/batch_struct_to_atom37.py /path/to/structure_files /path/to/output \
     --save-stats batch_stats.json --verbose
 ```
 
 在测试数据上运行并且手动检查结果。
 
 ```bash
-python scripts/batch_pdb_to_atom37.py tests/data/ tests/atom37/atom37_e2e
+python scripts/batch_struct_to_atom37.py tests/data/ tests/atom37/atom37_e2e
 ```
 
 ### 反向转换工具
 
-#### `batch_atom37_to_cif.py`
+#### `batch_atom37_to_struct.py`
 
-批量将 ProtRepr Atom37 格式文件转换为 CIF 或 PDB 结构文件的反向转换工具。
+批量将 ProtRepr Atom37 格式文件转换为结构文件（CIF 或 PDB）的反向转换工具。
 
 **核心实现**: `src/protrepr/batch_processing/atom37_to_cif_converter.py`
 
@@ -343,19 +343,19 @@ python scripts/batch_pdb_to_atom37.py tests/data/ tests/atom37/atom37_e2e
 
 ```bash
 # 转换为 CIF 格式 (默认)
-python batch_atom37_to_cif.py /path/to/atom37_files /path/to/output
+python batch_atom37_to_struct.py /path/to/atom37_files /path/to/output
 
 # 转换为 PDB 格式
-python batch_atom37_to_cif.py /path/to/atom37_files /path/to/output --format pdb
+python batch_atom37_to_struct.py /path/to/atom37_files /path/to/output --format pdb
 
 # 批量转换目录中的所有 Atom37 文件
-python batch_atom37_to_cif.py /data/atom37_pt_files /data/cif_output
+python batch_atom37_to_struct.py /data/atom37_pt_files /data/struct_output
 
 # 使用多进程加速处理
-python batch_atom37_to_cif.py /data/atom37_files /data/output --workers 8
+python batch_atom37_to_struct.py /data/atom37_files /data/output --workers 8
 
 # 保存转换统计信息
-python batch_atom37_to_cif.py atom37_files/ cif_output/ --save-stats reverse_stats.json
+python batch_atom37_to_struct.py atom37_files/ struct_output/ --save-stats reverse_stats.json
 ```
 
 ##### 高级选项
@@ -377,21 +377,21 @@ python batch_atom37_to_cif.py atom37_files/ cif_output/ --save-stats reverse_sta
 
 ```bash
 # 1. 基本反向转换 (CIF 格式，适合发布)
-python scripts/batch_atom37_to_cif.py /data/atom37_files /data/cif_output
+python scripts/batch_atom37_to_struct.py /data/atom37_files /data/struct_output
 
 # 2. 转换为 PDB 格式用于 PyMOL 可视化
-python scripts/batch_atom37_to_cif.py /results/atom37 /results/visualization \
+python scripts/batch_atom37_to_struct.py /results/atom37 /results/visualization \
     --format pdb \
     --workers 8
 
 # 3. 验证 AlphaFold 兼容性
-python scripts/batch_atom37_to_cif.py alphafold_predictions.pt validation_output/ \
+python scripts/batch_atom37_to_struct.py alphafold_predictions.pt validation_output/ \
     --format cif \
     --verbose \
     --save-stats alphafold_validation.json
 
 # 4. 批量发布结构预测结果
-python scripts/batch_atom37_to_cif.py /experiments/atom37_predictions /publish/structures \
+python scripts/batch_atom37_to_struct.py /experiments/atom37_predictions /publish/structures \
     --format cif \
     --no-preserve-structure
 ```

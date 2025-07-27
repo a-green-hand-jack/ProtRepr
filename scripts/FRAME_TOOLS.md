@@ -11,31 +11,32 @@ Frame 批处理工具提供两个核心功能：
 
 ## 📋 可用脚本
 
-### 1. `batch_pdb_to_frame.py` - PDB/CIF 到 Frame 转换
+### 1. `batch_struct_to_frame.py` - 结构文件到 Frame 转换
 
-将 PDB/CIF 文件批量转换为 Frame 格式（.pt 文件）。
+将结构文件（PDB/CIF/ENT/MMCIF）批量转换为 Frame 格式（.pt 文件）。
 
 **基本语法:**
 ```bash
-python batch_pdb_to_frame.py input_path output_dir [options]
+python batch_struct_to_frame.py input_path output_dir [options]
 ```
 
 **常用示例:**
 ```bash
 # 基本转换 (保存为 Frame 实例)
-python batch_pdb_to_frame.py /data/pdb_files /data/frame_output
+python batch_struct_to_frame.py /data/structure_files /data/frame_output
 
 # 保存为字典格式
-python batch_pdb_to_frame.py /data/pdb_files /data/frame_output --save-as-dict
+python batch_struct_to_frame.py /data/structure_files /data/frame_output --save-as-dict
+
 
 # 使用 8 个并行进程
-python batch_pdb_to_frame.py /data/pdb_files /data/frame_output --workers 8
+python batch_struct_to_frame.py /data/structure_files /data/frame_output --workers 8
 
 # 使用 GPU 加速
-python batch_pdb_to_frame.py /data/pdb_files /data/frame_output --device cuda
+python batch_struct_to_frame.py /data/structure_files /data/frame_output --device cuda
 
 # 扁平输出结构（不保持目录层次）
-python batch_pdb_to_frame.py /data/pdb_files /data/frame_output --no-preserve-structure
+python batch_struct_to_frame.py /data/structure_files /data/frame_output --no-preserve-structure
 ```
 
 **支持的输入格式:**
@@ -44,28 +45,28 @@ python batch_pdb_to_frame.py /data/pdb_files /data/frame_output --no-preserve-st
 - `.cif` - mmCIF 格式
 - `.mmcif` - macromolecular CIF 格式
 
-### 2. `batch_frame_to_cif.py` - Frame 到 CIF/PDB 转换
+### 2. `batch_frame_to_struct.py` - Frame 到结构文件转换
 
-将 Frame 格式文件批量转换为 CIF 或 PDB 文件。
+将 Frame 格式文件批量转换为结构文件（CIF 或 PDB）。
 
 **基本语法:**
 ```bash
-python batch_frame_to_cif.py input_path output_dir [options]
+python batch_frame_to_struct.py input_path output_dir [options]
 ```
 
 **常用示例:**
 ```bash
 # 转换为 CIF 格式 (默认)
-python batch_frame_to_cif.py /data/frame_files /data/cif_output
+python batch_frame_to_struct.py /data/frame_files /data/struct_output
 
 # 转换为 PDB 格式
-python batch_frame_to_cif.py /data/frame_files /data/pdb_output --format pdb
+python batch_frame_to_struct.py /data/frame_files /data/struct_output --format pdb
 
 # 使用并行处理
-python batch_frame_to_cif.py /data/frame_files /data/output --workers 8
+python batch_frame_to_struct.py /data/frame_files /data/output --workers 8
 
 # 扁平输出结构
-python batch_frame_to_cif.py /data/frame_files /data/output --no-preserve-structure
+python batch_frame_to_struct.py /data/frame_files /data/output --no-preserve-structure
 ```
 
 ## 📊 参数详解
@@ -100,25 +101,25 @@ python batch_frame_to_cif.py /data/frame_files /data/output --no-preserve-struct
 ### 场景1: 单文件转换
 ```bash
 # 转换单个 PDB 文件为 Frame
-python batch_pdb_to_frame.py protein.pdb output_dir
+python batch_struct_to_frame.py protein.pdb output_dir
 
 # 转换单个 Frame 文件为 CIF
-python batch_frame_to_cif.py frame.pt output_dir
+python batch_frame_to_struct.py frame.pt output_dir
 ```
 
 ### 场景2: 批量转换整个目录
 ```bash
 # 转换目录中所有结构文件为 Frame 格式
-python batch_pdb_to_frame.py /data/pdbs /data/frames --workers 16
+python batch_struct_to_frame.py /data/structure_files /data/frames --workers 16
 
 # 转换目录中所有 Frame 文件为 PDB 格式
-python batch_frame_to_cif.py /data/frames /data/pdbs --format pdb --workers 16
+python batch_frame_to_struct.py /data/frames /data/structure_files --format pdb --workers 16
 ```
 
 ### 场景3: 高性能批量处理
 ```bash
 # 使用 GPU 加速 + 高并行度 + 统计信息保存
-python batch_pdb_to_frame.py \
+python batch_struct_to_frame.py \
     /data/large_dataset \
     /data/frame_output \
     --device cuda \
@@ -129,11 +130,11 @@ python batch_pdb_to_frame.py \
 
 ### 场景4: 往返转换验证
 ```bash
-# 第一步: PDB → Frame
-python batch_pdb_to_frame.py original_pdbs frame_intermediate --workers 8
+# 第一步: 结构文件 → Frame
+python batch_struct_to_frame.py original_structure_files frame_intermediate --workers 8
 
-# 第二步: Frame → PDB (验证)
-python batch_frame_to_cif.py frame_intermediate reconstructed_pdbs --format pdb --workers 8
+# 第二步: Frame → 结构文件 (验证)
+python batch_frame_to_struct.py frame_intermediate reconstructed_structure_files --format pdb --workers 8
 ```
 
 ## 📈 性能优化建议
@@ -241,13 +242,13 @@ python batch_frame_to_cif.py frame_intermediate reconstructed_pdbs --format pdb 
 1. **内存不足**
    ```bash
    # 减少并行进程数
-   python batch_pdb_to_frame.py input output --workers 2
+   python batch_struct_to_frame.py input output --workers 2
    ```
 
 2. **CUDA 不可用**
    ```bash
    # 回退到 CPU
-   python batch_pdb_to_frame.py input output --device cpu
+   python batch_struct_to_frame.py input output --device cpu
    ```
 
 3. **文件格式不支持**

@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
 """
-批量 PDB 到 Atom37 转换脚本
+批量 Frame 到结构文件转换脚本
 
-这个脚本提供命令行接口，用于批量将 PDB/CIF 文件转换为 ProtRepr 的 Atom37 格式。
+这个脚本提供命令行接口，用于批量将 ProtRepr Frame 格式文件转换为结构文件（CIF 或 PDB）。
 核心实现位于 protrepr.batch_processing 模块中。
 
+输入格式: .pt (PyTorch 格式的 Frame 数据)
+支持的输出格式: .cif, .pdb
+
 使用方法:
-    python batch_pdb_to_atom37.py input_dir output_dir [options]
+    python batch_frame_to_struct.py input_dir output_dir [options]
 
 示例:
-    # 基本用法 (保存为 Atom37 实例)
-    python batch_pdb_to_atom37.py /path/to/pdb_files /path/to/output
+    # 基本用法 (转换为 CIF 格式)
+    python batch_frame_to_struct.py /path/to/frame_files /path/to/output
     
-    # 保存为字典格式
-    python batch_pdb_to_atom37.py /path/to/pdb_files /path/to/output --save-as-dict
+    # 转换为 PDB 格式
+    python batch_frame_to_struct.py /path/to/frame_files /path/to/output --format pdb
     
     # 使用并行处理
-    python batch_pdb_to_atom37.py /path/to/pdb_files /path/to/output --workers 8
+    python batch_frame_to_struct.py /path/to/frame_files /path/to/output --workers 8
     
     # 不保持目录结构
-    python batch_pdb_to_atom37.py /path/to/pdb_files /path/to/output --no-preserve-structure
-    
-    # 指定设备
-    python batch_pdb_to_atom37.py /path/to/pdb_files /path/to/output --device cuda
+    python batch_frame_to_struct.py /path/to/frame_files /path/to/output --no-preserve-structure
 """
 
 import sys
@@ -34,9 +34,8 @@ import time
 # 将项目根目录下的 src 目录添加到 Python 解释器的搜索路径中
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-import torch
 from protrepr.batch_processing import (
-    BatchPDBToAtom37Converter,
+    BatchFrameToCIFConverter,
     save_statistics
 )
 
@@ -52,26 +51,33 @@ logger = logging.getLogger(__name__)
 def main():
     """主函数。"""
     parser = argparse.ArgumentParser(
-        description="批量将 PDB/CIF 文件转换为 ProtRepr Atom37 格式",
+        description="批量将 ProtRepr Frame 文件转换为结构文件（CIF/PDB）格式",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  %(prog)s /data/pdb_files /data/atom37_output
-  %(prog)s /data/pdb_files /data/atom37_output --workers 8 --save-as-dict
-  %(prog)s input.pdb output_dir --no-preserve-structure --device cuda
+  %(prog)s /data/frame_files /data/struct_output
+  %(prog)s /data/frame_files /data/struct_output --format pdb --workers 8
+  %(prog)s input.pt output_dir --no-preserve-structure
         """
     )
     
     parser.add_argument(
         'input_path',
         type=Path,
-        help='输入文件或目录路径'
+        help='输入 Frame 文件或目录路径 (.pt 格式)'
     )
     
     parser.add_argument(
         'output_dir',
         type=Path,
         help='输出目录路径'
+    )
+    
+    parser.add_argument(
+        '--format', '-f',
+        choices=['cif', 'pdb'],
+        default='cif',
+        help='输出格式 (默认: cif)'
     )
     
     parser.add_argument(
@@ -92,19 +98,6 @@ def main():
         action='store_true',
         default=True,
         help='递归搜索子目录 (默认: True)'
-    )
-    
-    parser.add_argument(
-        '--device',
-        choices=['cpu', 'cuda'],
-        default='cpu',
-        help='计算设备 (默认: cpu)'
-    )
-    
-    parser.add_argument(
-        '--save-as-dict',
-        action='store_true',
-        help='保存为字典格式而非 Atom37 实例 (默认: 保存为实例)'
     )
     
     parser.add_argument(
@@ -130,24 +123,17 @@ def main():
         logger.error(f"输入路径不存在: {args.input_path}")
         return 1
     
-    # 检查 CUDA 可用性
-    if args.device == 'cuda' and not torch.cuda.is_available():
-        logger.warning("CUDA 不可用，回退到 CPU")
-        args.device = 'cpu'
-    
     try:
         # 创建转换器
-        converter = BatchPDBToAtom37Converter(
+        converter = BatchFrameToCIFConverter(
             n_workers=args.workers,
             preserve_structure=not args.no_preserve_structure,
-            device=args.device,
-            save_as_instance=not args.save_as_dict  # 默认保存为实例
+            output_format=args.format
         )
         
         # 执行批量转换
         logger.info(f"开始批量转换: {args.input_path} -> {args.output_dir}")
-        save_format = "字典格式" if args.save_as_dict else "Atom37实例"
-        logger.info(f"保存格式: {save_format}")
+        logger.info(f"输出格式: {args.format.upper()}")
         
         start_time = time.perf_counter()
         
@@ -165,7 +151,7 @@ def main():
         logger.info(f"  总文件数: {statistics['total']}")
         logger.info(f"  成功转换: {statistics['success']}")
         logger.info(f"  转换失败: {statistics['failed']}")
-        logger.info(f"  保存格式: {save_format}")
+        logger.info(f"  输出格式: {args.format.upper()}")
         logger.info(f"  总用时: {total_time:.2f} 秒")
         
         if statistics['success'] > 0:

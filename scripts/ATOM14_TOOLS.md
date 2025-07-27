@@ -7,13 +7,13 @@
 - **轻量包装器**: 脚本文件只负责命令行参数解析和用户界面，核心实现位于 `src/protrepr/` 中
 - **简洁易用**: 提供直观的命令行接口，支持常见的数据处理任务
 - **模块化**: 每个脚本专注于一个特定的功能
-- **双向转换**: 支持正向转换（PDB/CIF → Atom14/Atom37）和反向转换（Atom14/Atom37 → CIF/PDB）
+- **双向转换**: 支持正向转换（结构文件 → Atom14/Atom37）和反向转换（Atom14/Atom37 → 结构文件）
 
 ## 可用工具
 
-### `batch_pdb_to_atom14.py`
+### `batch_struct_to_atom14.py`
 
-批量将 PDB/CIF 文件转换为 ProtRepr Atom14 格式的命令行工具。
+批量将结构文件（PDB/CIF/ENT/MMCIF）转换为 ProtRepr Atom14 格式的命令行工具。
 
 **核心实现**: `src/protrepr/batch_processing/atom14_batch_converter.py`
 
@@ -30,32 +30,32 @@
 
 ```bash
 # 转换单个文件 (保存为 Atom14 实例)
-python batch_pdb_to_atom14.py protein.pdb output_dir
+python batch_struct_to_atom14.py protein.pdb output_dir
 
 # 保存为字典格式
-python batch_pdb_to_atom14.py protein.pdb output_dir --save-as-dict
+python batch_struct_to_atom14.py protein.pdb output_dir --save-as-dict
 
 # 批量转换目录中的所有结构文件
-python batch_pdb_to_atom14.py /path/to/pdb_files /path/to/output
+python batch_struct_to_atom14.py /path/to/structure_files /path/to/output
 
 # 使用多进程加速处理
-python batch_pdb_to_atom14.py /path/to/pdb_files /path/to/output --workers 8
+python batch_struct_to_atom14.py /path/to/structure_files /path/to/output --workers 8
 
 # 保存转换统计信息
-python batch_pdb_to_atom14.py proteins/ output/ --save-stats stats.json
+python batch_struct_to_atom14.py proteins/ output/ --save-stats stats.json
 ```
 
 #### 新特性示例 (v2.0)
 
 ```bash
 # 保存为 Atom14 实例 (默认，推荐用于直接加载使用)
-python batch_pdb_to_atom14.py /data/proteins /data/atom14_instances
+python batch_struct_to_atom14.py /data/proteins /data/atom14_instances
 
 # 保存为字典格式 (与旧版本兼容)
-python batch_pdb_to_atom14.py /data/proteins /data/atom14_dicts --save-as-dict
+python batch_struct_to_atom14.py /data/proteins /data/atom14_dicts --save-as-dict
 
 # 结合并行处理和字典格式
-python batch_pdb_to_atom14.py /data/proteins /data/output --workers 8 --save-as-dict
+python batch_struct_to_atom14.py /data/proteins /data/output --workers 8 --save-as-dict
 ```
 
 #### 高级选项
@@ -135,30 +135,30 @@ atom14 = Atom14.load("output.pt")  # 自动识别格式
 
 ```bash
 # 1. 基本转换 (推荐)
-python scripts/batch_pdb_to_atom14.py /tests/data /tests/atom14_e2e 
+python scripts/batch_struct_to_atom14.py /tests/data /tests/atom14_e2e 
 
 # 2. 高性能批量处理
-python scripts/batch_pdb_to_atom14.py /data/large_dataset /data/output \
+python scripts/batch_struct_to_atom14.py /data/large_dataset /data/output \
     --workers 16 \
     --device cpu \
     --save-stats processing_stats.json
 
 # 3. 兼容模式 (字典格式)
-python scripts/batch_pdb_to_atom14.py /data/proteins /data/legacy_output \
+python scripts/batch_struct_to_atom14.py /data/proteins /data/legacy_output \
     --save-as-dict \
     --no-preserve-structure
 
 # 4. 验证工作流
-python scripts/batch_pdb_to_atom14.py sample.pdb output/ --verbose
+python scripts/batch_struct_to_atom14.py sample.pdb output/ --verbose
 # 然后使用 Python 加载和验证：
 # >>> from protrepr.core.atom14 import Atom14
 # >>> atom14 = Atom14.load("output/sample.pt")
 # >>> atom14.to_cif("verification.cif")
 ```
 
-### `batch_atom14_to_cif.py` (新增)
+### `batch_atom14_to_struct.py` (反向转换)
 
-批量将 ProtRepr Atom14 格式文件转换为 CIF 或 PDB 结构文件的反向转换工具。
+批量将 ProtRepr Atom14 格式文件转换为结构文件（CIF 或 PDB）的反向转换工具。
 
 **核心实现**: `src/protrepr/batch_processing/atom14_to_cif_converter.py`
 
@@ -174,19 +174,19 @@ python scripts/batch_pdb_to_atom14.py sample.pdb output/ --verbose
 
 ```bash
 # 转换为 CIF 格式 (默认)
-python batch_atom14_to_cif.py /path/to/atom14_files /path/to/output
+python batch_atom14_to_struct.py /path/to/atom14_files /path/to/output
 
 # 转换为 PDB 格式
-python batch_atom14_to_cif.py /path/to/atom14_files /path/to/output --format pdb
+python batch_atom14_to_struct.py /path/to/atom14_files /path/to/output --format pdb
 
 # 批量转换目录中的所有 Atom14 文件
-python batch_atom14_to_cif.py /data/atom14_pt_files /data/cif_output
+python batch_atom14_to_struct.py /data/atom14_pt_files /data/struct_output
 
 # 使用多进程加速处理
-python batch_atom14_to_cif.py /data/atom14_files /data/output --workers 8
+python batch_atom14_to_struct.py /data/atom14_files /data/output --workers 8
 
 # 保存转换统计信息
-python batch_atom14_to_cif.py atom14_files/ cif_output/ --save-stats reverse_stats.json
+python batch_atom14_to_struct.py atom14_files/ struct_output/ --save-stats reverse_stats.json
 ```
 
 #### 高级选项
@@ -208,21 +208,21 @@ python batch_atom14_to_cif.py atom14_files/ cif_output/ --save-stats reverse_sta
 
 ```bash
 # 1. 基本反向转换 (CIF 格式)
-python scripts/batch_atom14_to_cif.py /data/atom14_files /data/cif_output
+python scripts/batch_atom14_to_struct.py /data/atom14_files /data/struct_output
 
 # 2. 转换为 PDB 格式用于可视化
-python scripts/batch_atom14_to_cif.py /results/atom14 /results/visualization \
+python scripts/batch_atom14_to_struct.py /results/atom14 /results/visualization \
     --format pdb \
     --workers 8
 
 # 3. 完整工作流验证
-python scripts/batch_atom14_to_cif.py atom14_sample.pt verification_output/ \
+python scripts/batch_atom14_to_struct.py atom14_sample.pt verification_output/ \
     --format cif \
     --verbose \
     --save-stats verification_stats.json
 
 # 4. 批量处理实验结果
-python scripts/batch_atom14_to_cif.py /experiments/atom14_predictions /publish/structures \
+python scripts/batch_atom14_to_struct.py /experiments/atom14_predictions /publish/structures \
     --format cif \
     --no-preserve-structure
 ```

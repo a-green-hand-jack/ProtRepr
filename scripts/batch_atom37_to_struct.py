@@ -1,25 +1,28 @@
 #!/usr/bin/env python3
 """
-批量 Atom14 到 CIF/PDB 转换脚本
+批量 Atom37 到结构文件转换脚本
 
-这个脚本提供命令行接口，用于批量将 ProtRepr Atom14 格式文件转换为 CIF 或 PDB 文件。
+这个脚本提供命令行接口，用于批量将 ProtRepr Atom37 格式文件转换为结构文件（CIF 或 PDB）。
 核心实现位于 protrepr.batch_processing 模块中。
 
+输入格式: .pt (PyTorch 格式的 Atom37 数据)
+支持的输出格式: .cif, .pdb
+
 使用方法:
-    python batch_atom14_to_cif.py input_dir output_dir [options]
+    python batch_atom37_to_struct.py input_dir output_dir [options]
 
 示例:
     # 基本用法 (转换为 CIF 格式)
-    python batch_atom14_to_cif.py /path/to/atom14_files /path/to/output
+    python batch_atom37_to_struct.py /path/to/atom37_files /path/to/output
     
     # 转换为 PDB 格式
-    python batch_atom14_to_cif.py /path/to/atom14_files /path/to/output --format pdb
+    python batch_atom37_to_struct.py /path/to/atom37_files /path/to/output --format pdb
     
     # 使用并行处理
-    python batch_atom14_to_cif.py /path/to/atom14_files /path/to/output --workers 8
+    python batch_atom37_to_struct.py /path/to/atom37_files /path/to/output --workers 8
     
     # 不保持目录结构
-    python batch_atom14_to_cif.py /path/to/atom14_files /path/to/output --no-preserve-structure
+    python batch_atom37_to_struct.py /path/to/atom37_files /path/to/output --no-preserve-structure
 """
 
 import sys
@@ -32,7 +35,7 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from protrepr.batch_processing import (
-    BatchAtom14ToCIFConverter,
+    BatchAtom37ToCIFConverter,
     save_statistics
 )
 
@@ -48,12 +51,12 @@ logger = logging.getLogger(__name__)
 def main():
     """主函数。"""
     parser = argparse.ArgumentParser(
-        description="批量将 ProtRepr Atom14 文件转换为 CIF/PDB 格式",
+        description="批量将 ProtRepr Atom37 文件转换为结构文件（CIF/PDB）格式",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  %(prog)s /data/atom14_files /data/cif_output
-  %(prog)s /data/atom14_files /data/pdb_output --format pdb --workers 8
+  %(prog)s /data/atom37_files /data/struct_output
+  %(prog)s /data/atom37_files /data/struct_output --format pdb --workers 8
   %(prog)s input.pt output_dir --no-preserve-structure
         """
     )
@@ -61,7 +64,7 @@ def main():
     parser.add_argument(
         'input_path',
         type=Path,
-        help='输入 Atom14 文件或目录路径 (.pt 格式)'
+        help='输入 Atom37 文件或目录路径 (.pt 格式)'
     )
     
     parser.add_argument(
@@ -122,7 +125,7 @@ def main():
     
     try:
         # 创建转换器
-        converter = BatchAtom14ToCIFConverter(
+        converter = BatchAtom37ToCIFConverter(
             n_workers=args.workers,
             preserve_structure=not args.no_preserve_structure,
             output_format=args.format
