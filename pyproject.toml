@@ -53,10 +53,21 @@ notebooks = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/your-org/protrepr"
+Homepage = "https://github.com/a-green-hand-jack/ProtRepr"
 Documentation = "https://protrepr.readthedocs.io"
-Repository = "https://github.com/your-org/protrepr.git"
-Issues = "https://github.com/your-org/protrepr/issues"
+Repository = "https://github.com/a-green-hand-jack/ProtRepr.git"
+Issues = "https://github.com/a-green-hand-jack/ProtRepr/issues"
+
+[project.scripts]
+# 结构文件到表示格式转换工具
+protrepr-struct-to-atom14 = "protrepr.cli.struct_to_atom14:main"
+protrepr-struct-to-atom37 = "protrepr.cli.struct_to_atom37:main"
+protrepr-struct-to-frame = "protrepr.cli.struct_to_frame:main"
+
+# 表示格式到结构文件转换工具
+protrepr-atom14-to-struct = "protrepr.cli.atom14_to_struct:main"
+protrepr-atom37-to-struct = "protrepr.cli.atom37_to_struct:main"
+protrepr-frame-to-struct = "protrepr.cli.frame_to_struct:main"
 
 [tool.hatch.metadata]
 allow-direct-references = true
