@@ -528,12 +528,12 @@ class Atom37:
         else:
             raise ValueError(f"无法识别的文件格式: {type(data)}")
 
-    def to_cif(self, output_path: Union[str, Path]) -> None:
+    def to_cif(self, output_path: str) -> None:
         """
         将 Atom37 数据转换并保存为 CIF 文件。
         
         Args:
             output_path: 输出 CIF 文件路径
         """
-        save_atom37_to_cif(self, str(output_path))
+        save_atom37_to_cif(self, output_path)
         logger.info(f"Atom37 数据已转换并保存为 CIF 文件: {output_path}") 

@@ -12,7 +12,7 @@ Atom37 表示转换器 (基于 AlphaFold 标准)
 
 import logging
 from typing import List, Dict, Tuple, Optional, Any, Union
-
+from pathlib import Path
 import torch
 from protein_tensor import ProteinTensor, save_structure
 
@@ -744,7 +744,7 @@ def get_atom37_atom_positions() -> Dict[str, int]:
 
 def save_atom37_to_cif(
     atom37: Any,  # Atom37 类型
-    output_path: str,
+    output_path: Union[str, Path],
     title: str = "ProtRepr Atom37 Structure"
 ) -> None:
     """
@@ -763,7 +763,7 @@ def save_atom37_to_cif(
 
 def save_protein_tensor_to_cif(
     protein_tensor: ProteinTensor,
-    output_path: str,
+    output_path: Union[str, Path],
     title: str = "ProtRepr Reconstructed Structure"
 ) -> None:
     """

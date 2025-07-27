@@ -1,24 +1,26 @@
 """
-Frame 蛋白质表示数据类
+Frame 蛋白质表示数据。
 
-本模块定义了 Frame 数据类，用于表示基于残基的刚体坐标系表示法。该类封装了
-蛋白质结构的 frame 表示相关的所有数据和方法，支持与 ProteinTensor 的双向转换。
+本模块定义了 Frame 数据类，用于表示基于刚体坐标系的蛋白质表示法。该类封装了蛋白质结构的
+frame 表示相关的所有数据和方法，支持与 ProteinTensor 的双向转换。
 
 核心特性：
 - 使用 @dataclass 装饰器，支持 frame.translations 风格的属性访问
+- 存储每个残基的局部坐标系（旋转矩阵和平移向量）
 - 存储完整的蛋白质元数据（链ID、残基类型、残基编号等）
 - 双向转换：ProteinTensor ↔ Frame
 - PyTorch 原生支持，GPU 加速计算
-- SE(3)-equivariant 网络支持
-- 刚体变换计算和应用功能
+- 天然支持批量操作，所有张量支持任意 batch 维度
+- 完整的验证和设备管理功能
 """
 
 import logging
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, List, Union, Tuple
-
+from typing import Optional, Dict, Any, List, Union
+from pathlib import Path
 import torch
 from protein_tensor import ProteinTensor
+from ..representations.frame_converter import protein_tensor_to_frame, frame_to_protein_tensor, validate_frame_data, save_frame_to_cif
 
 logger = logging.getLogger(__name__)
 
@@ -28,19 +30,24 @@ class Frame:
     """
     Frame 蛋白质表示数据类。
     
-    该类封装了基于刚体坐标系的蛋白质结构表示，包含平移、旋转以及
-    完整的元数据信息。支持与 ProteinTensor 的双向转换。
+    该类封装了基于刚体坐标系的蛋白质结构表示，使用每个残基的旋转矩阵和平移向量
+    来代替原子坐标表示。支持与 ProteinTensor 的双向转换，天然支持批量操作。
     
     Attributes:
-        translations: 形状为 (num_residues, 3) 的平移向量（通常是CA坐标）
-        rotations: 形状为 (num_residues, 3, 3) 的旋转矩阵
-        chain_ids: 形状为 (num_residues,) 的链标识符张量
-        residue_types: 形状为 (num_residues,) 的残基类型张量（氨基酸编号）
-        residue_indices: 形状为 (num_residues,) 的残基在链中的位置编号
-        residue_names: 长度为 num_residues 的残基名称列表（如 ['ALA', 'GLY', ...]）
+        translations: 形状为 (..., num_residues, 3) 的平移向量张量（CA 原子坐标）
+        rotations: 形状为 (..., num_residues, 3, 3) 的旋转矩阵张量（局部坐标系）
+        res_mask: 形状为 (..., num_residues) 的布尔掩码张量
+                  标识真实残基：1=标准氨基酸残基，0=非标准或缺失残基
+        chain_ids: 形状为 (..., num_residues) 的链标识符张量
+        residue_types: 形状为 (..., num_residues) 的残基类型张量（氨基酸编号）
+        residue_indices: 形状为 (..., num_residues) 的残基在蛋白质中的全局编号
+                        支持链间 gap，如 A链:1-100, B链:200-300
+        chain_residue_indices: 形状为 (..., num_residues) 的残基在各自链中的局部编号
+        residue_names: 形状为 (..., num_residues) 的残基名称张量（整数编码）
         
     Properties:
         device: 张量所在的设备
+        batch_shape: 批量维度的形状
         num_residues: 残基数量
         num_chains: 链的数量
         
@@ -50,24 +57,26 @@ class Frame:
         to_device: 将所有张量移动到指定设备
         validate: 验证数据一致性
         get_chain_residues: 获取指定链的残基范围
-        apply_transform: 将刚体变换应用到坐标
-        compose_transforms: 组合两个刚体变换
-        inverse_transform: 计算逆变换
-        interpolate_frames: 在两个frame之间插值
+        get_backbone_coords: 重建主链原子坐标
+        get_local_coordinates: 获取标准局部坐标系中的原子位置
     """
     
     # 刚体变换数据
-    translations: torch.Tensor  # (num_residues, 3) - 平移向量
-    rotations: torch.Tensor     # (num_residues, 3, 3) - 旋转矩阵
+    translations: torch.Tensor        # (..., num_residues, 3) - CA 原子坐标
+    rotations: torch.Tensor           # (..., num_residues, 3, 3) - 局部坐标系旋转矩阵
+    res_mask: torch.Tensor            # (..., num_residues) - 1=标准残基, 0=非标准/缺失
     
     # 蛋白质元数据
-    chain_ids: torch.Tensor       # (num_residues,) - 链标识符
-    residue_types: torch.Tensor   # (num_residues,) - 残基类型编号
-    residue_indices: torch.Tensor # (num_residues,) - 残基在链中的位置
-    residue_names: List[str]      # 残基名称列表，如 ['ALA', 'GLY', ...]
+    chain_ids: torch.Tensor           # (..., num_residues) - 链标识符
+    residue_types: torch.Tensor       # (..., num_residues) - 残基类型编号
+    residue_indices: torch.Tensor     # (..., num_residues) - 全局残基编号（支持链间gap）
+    chain_residue_indices: torch.Tensor  # (..., num_residues) - 链内局部编号
+    
+    # 名称映射（张量化）
+    residue_names: torch.Tensor       # (..., num_residues) - 残基名称编码
     
     # 可选的额外元数据
-    confidence_scores: Optional[torch.Tensor] = None  # (num_residues,) - 置信度分数
+    b_factors: Optional[torch.Tensor] = None      # (..., num_residues) - B因子
     
     def __post_init__(self) -> None:
         """
@@ -77,14 +86,50 @@ class Frame:
             ValueError: 当数据形状或类型不符合要求时
         """
         logger.debug("初始化 Frame 数据类")
-        # TODO: 实现初始化后验证
-        # 1. 验证张量形状的一致性
-        # 2. 验证数据类型
-        # 3. 验证旋转矩阵的有效性（行列式=1，正交性）
-        # 4. 验证 residue_names 长度与 num_residues 一致
-        # 5. 验证平移和旋转的形状匹配
-        pass
-    
+        
+        # 获取批量形状和残基数量
+        # translations 形状: (..., num_residues, 3)
+        # 最后2个维度是: (num_residues, 3)
+        batch_shape = self.translations.shape[:-2]  # 去掉最后两个维度
+        num_residues = self.translations.shape[-2]  # 倒数第二个维度是 num_residues
+        
+        # 验证平移向量形状
+        expected_translations_shape = batch_shape + (num_residues, 3)
+        if self.translations.shape != expected_translations_shape:
+            raise ValueError(f"平移向量张量形状无效: {self.translations.shape}，期望 {expected_translations_shape}")
+        
+        # 验证旋转矩阵形状
+        expected_rotations_shape = batch_shape + (num_residues, 3, 3)
+        if self.rotations.shape != expected_rotations_shape:
+            raise ValueError(f"旋转矩阵张量形状无效: {self.rotations.shape}，期望 {expected_rotations_shape}")
+        
+        # 验证残基掩码形状
+        expected_res_mask_shape = batch_shape + (num_residues,)
+        if self.res_mask.shape != expected_res_mask_shape:
+            raise ValueError(f"残基掩码张量形状无效: {self.res_mask.shape}，期望 {expected_res_mask_shape}")
+        
+        # 验证元数据张量形状
+        expected_meta_shape = batch_shape + (num_residues,)
+        
+        if self.chain_ids.shape != expected_meta_shape:
+            raise ValueError(f"链ID张量形状无效: {self.chain_ids.shape}，期望 {expected_meta_shape}")
+        
+        if self.residue_types.shape != expected_meta_shape:
+            raise ValueError(f"残基类型张量形状无效: {self.residue_types.shape}，期望 {expected_meta_shape}")
+        
+        if self.residue_indices.shape != expected_meta_shape:
+            raise ValueError(f"残基索引张量形状无效: {self.residue_indices.shape}，期望 {expected_meta_shape}")
+        
+        if self.chain_residue_indices.shape != expected_meta_shape:
+            raise ValueError(f"链内残基索引张量形状无效: {self.chain_residue_indices.shape}，期望 {expected_meta_shape}")
+        
+        if self.residue_names.shape != expected_meta_shape:
+            raise ValueError(f"残基名称张量形状无效: {self.residue_names.shape}，期望 {expected_meta_shape}")
+        
+        # 验证可选属性
+        if self.b_factors is not None and self.b_factors.shape != expected_meta_shape:
+            raise ValueError(f"B因子张量形状无效: {self.b_factors.shape}，期望 {expected_meta_shape}")
+
     @classmethod
     def from_protein_tensor(
         cls,
@@ -115,25 +160,25 @@ class Frame:
         """
         logger.info("从 ProteinTensor 创建 Frame 实例")
         
-        # TODO: 实现从 ProteinTensor 到 Frame 的转换
-        # 1. 验证 protein_tensor 使用了 torch 后端
-        # 2. 提取主链原子坐标（N, CA, C）
-        # 3. 计算平移向量（CA坐标）
-        # 4. 通过 Gram-Schmidt 正交化计算旋转矩阵
-        # 5. 提取链信息和残基信息
-        # 6. 处理设备转移
-        # 7. 验证旋转矩阵的有效性
+        result = protein_tensor_to_frame(protein_tensor, device)
+        (translations, rotations, res_mask, chain_ids, residue_types, residue_indices, 
+         chain_residue_indices, residue_names) = result
         
-        raise NotImplementedError("从 ProteinTensor 转换功能尚未实现")
-    
-    def to_protein_tensor(self, reference_coords: Optional[torch.Tensor] = None) -> ProteinTensor:
+        return cls(
+            translations=translations,
+            rotations=rotations,
+            res_mask=res_mask,
+            chain_ids=chain_ids,
+            residue_types=residue_types,
+            residue_indices=residue_indices,
+            chain_residue_indices=chain_residue_indices,
+            residue_names=residue_names
+        )
+
+    def to_protein_tensor(self) -> ProteinTensor:
         """
         将 Frame 实例转换为 ProteinTensor。
         
-        Args:
-            reference_coords: 可选的参考坐标，用于重建完整的原子坐标
-                           如果为 None，将只重建主链原子
-                           
         Returns:
             ProteinTensor: 转换后的 ProteinTensor 对象，使用 torch 后端
             
@@ -146,15 +191,17 @@ class Frame:
         """
         logger.info("将 Frame 转换为 ProteinTensor")
         
-        # TODO: 实现从 Frame 到 ProteinTensor 的转换
-        # 1. 使用刚体变换重建主链原子坐标
-        # 2. 如果提供了reference_coords，重建完整的原子坐标
-        # 3. 重建原子类型和残基信息
-        # 4. 构造 ProteinTensor 所需的数据结构
-        # 5. 确保使用 torch 后端
-        
-        raise NotImplementedError("转换为 ProteinTensor 功能尚未实现")
-    
+        return frame_to_protein_tensor(
+            self.translations,
+            self.rotations,
+            self.res_mask,
+            self.chain_ids,
+            self.residue_types,
+            self.residue_indices,
+            self.chain_residue_indices,
+            self.residue_names
+        )
+
     def to_device(self, device: torch.device) -> "Frame":
         """
         将所有张量移动到指定设备。
@@ -167,12 +214,31 @@ class Frame:
         """
         logger.debug(f"将 Frame 数据移动到设备: {device}")
         
-        # TODO: 实现设备转移
-        # 移动所有 torch.Tensor 属性到新设备
-        # 保持非张量属性不变
+        # 移动所有张量属性
+        translations = self.translations.to(device)
+        rotations = self.rotations.to(device)
+        res_mask = self.res_mask.to(device)
+        chain_ids = self.chain_ids.to(device)
+        residue_types = self.residue_types.to(device)
+        residue_indices = self.residue_indices.to(device)
+        chain_residue_indices = self.chain_residue_indices.to(device)
+        residue_names = self.residue_names.to(device)
         
-        raise NotImplementedError("设备转移功能尚未实现")
-    
+        # 移动可选张量
+        b_factors = self.b_factors.to(device) if self.b_factors is not None else None
+        
+        return Frame(
+            translations=translations,
+            rotations=rotations,
+            res_mask=res_mask,
+            chain_ids=chain_ids,
+            residue_types=residue_types,
+            residue_indices=residue_indices,
+            chain_residue_indices=chain_residue_indices,
+            residue_names=residue_names,
+            b_factors=b_factors
+        )
+
     def validate(self) -> None:
         """
         验证 Frame 数据的一致性和有效性。
@@ -181,33 +247,44 @@ class Frame:
             ValueError: 当数据不一致或无效时
         """
         logger.debug("验证 Frame 数据一致性")
-        
-        # TODO: 实现数据验证
-        # 1. 验证张量形状（translations: (N, 3), rotations: (N, 3, 3)）
-        # 2. 验证数据类型
-        # 3. 验证旋转矩阵的有效性：
-        #    - 行列式接近 1
-        #    - 矩阵是正交的（R @ R.T ≈ I）
-        # 4. 验证平移向量的合理性
-        # 5. 验证元数据的一致性
-        
-        raise NotImplementedError("数据验证功能尚未实现")
-    
+                
+        validate_frame_data(
+            self.translations,
+            self.rotations,
+            self.res_mask,
+            self.chain_ids,
+            self.residue_types,
+            self.residue_indices,
+            self.chain_residue_indices,
+            self.residue_names
+        )
+
     @property
     def device(self) -> torch.device:
         """获取张量所在的设备。"""
         return self.translations.device
-    
+
+    @property
+    def batch_shape(self) -> torch.Size:
+        """获取批量维度的形状。"""
+        return self.translations.shape[:-2]
+
     @property
     def num_residues(self) -> int:
         """获取残基数量。"""
-        return self.translations.shape[0]
-    
+        return self.translations.shape[-2]
+
     @property
     def num_chains(self) -> int:
         """获取链的数量。"""
-        return len(torch.unique(self.chain_ids))
-    
+        # 对于批量数据，返回最后一个 batch 的链数量
+        if len(self.batch_shape) == 0:
+            return len(torch.unique(self.chain_ids))
+        else:
+            # 对于批量数据，取最后一个样本
+            last_sample_chain_ids = self.chain_ids[..., -1, :].flatten()
+            return len(torch.unique(last_sample_chain_ids))
+
     def get_chain_residues(self, chain_id: Union[str, int]) -> torch.Tensor:
         """
         获取指定链的残基索引。
@@ -218,137 +295,191 @@ class Frame:
         Returns:
             torch.Tensor: 属于该链的残基索引张量
         """
-        # TODO: 实现链残基查询
-        raise NotImplementedError("链残基查询功能尚未实现")
-    
-    def apply_transform(self, coords: torch.Tensor) -> torch.Tensor:
+        if isinstance(chain_id, str):
+            # 如果传入字符串，尝试转换为数字
+            try:
+                chain_id = int(chain_id)
+            except ValueError:
+                raise ValueError(f"无法将链ID '{chain_id}' 转换为数字")
+        
+        chain_mask = self.chain_ids == chain_id
+        
+        # 对于批量数据，返回所有批次中匹配的残基
+        if len(self.batch_shape) == 0:
+            residue_indices = torch.where(chain_mask)[0]
+        else:
+            # 对于批量数据，返回布尔掩码
+            residue_indices = chain_mask
+        
+        return residue_indices
+
+    def get_backbone_coords(self) -> torch.Tensor:
         """
-        将刚体变换应用到坐标上。
+        从 Frame 数据重建主链原子（N, CA, C, O）的坐标。
+        
+        Returns:
+            torch.Tensor: 形状为 (..., num_residues, 4, 3) 的主链原子坐标
+        """
+        from ..utils.geometry import reconstruct_backbone_from_rigid_transforms
+        
+        # 重建主链坐标
+        backbone_coords_tuple = reconstruct_backbone_from_rigid_transforms(
+            self.translations, self.rotations
+        )
+        backbone_coords = torch.stack(backbone_coords_tuple, dim=-1)
+        return backbone_coords
+
+    def get_local_coordinates(self) -> Dict[str, torch.Tensor]:
+        """
+        获取标准局部坐标系中的原子位置。
+        
+        Returns:
+            Dict[str, torch.Tensor]: 包含各原子在局部坐标系中标准位置的字典
+        """
+        from ..utils.geometry import STANDARD_BACKBONE_GEOMETRY
+        import math
+        
+        device = self.device
+        batch_shape = self.batch_shape
+        num_residues = self.num_residues
+        
+        # 标准主链几何参数
+        ca_n_length = STANDARD_BACKBONE_GEOMETRY["CA_N_BOND_LENGTH"]
+        ca_c_length = STANDARD_BACKBONE_GEOMETRY["CA_C_BOND_LENGTH"]
+        c_o_length = STANDARD_BACKBONE_GEOMETRY["C_O_BOND_LENGTH"]
+        n_ca_c_angle = math.radians(STANDARD_BACKBONE_GEOMETRY["N_CA_C_ANGLE"])
+        ca_c_o_angle = math.radians(STANDARD_BACKBONE_GEOMETRY["CA_C_O_ANGLE"])
+        
+        # CA 原子在局部坐标系原点
+        ca_local = torch.zeros(*batch_shape, num_residues, 3, device=device)
+        
+        # C 原子在 x 轴正方向
+        c_local = torch.zeros(*batch_shape, num_residues, 3, device=device)
+        c_local[..., 0] = ca_c_length
+        
+        # N 原子在 x-y 平面内，考虑键角
+        n_x = -ca_n_length * math.cos(math.pi - n_ca_c_angle)
+        n_y = ca_n_length * math.sin(math.pi - n_ca_c_angle)
+        n_local = torch.zeros(*batch_shape, num_residues, 3, device=device)
+        n_local[..., 0] = n_x
+        n_local[..., 1] = n_y
+        
+        # O 原子：从 C 原子出发，考虑 CA-C-O 键角
+        o_direction_x = math.cos(math.pi - ca_c_o_angle)  # 相对于 CA-C 方向
+        o_direction_y = math.sin(math.pi - ca_c_o_angle)  # 垂直分量
+        
+        o_local = torch.zeros(*batch_shape, num_residues, 3, device=device)
+        o_local[..., 0] = ca_c_length + c_o_length * o_direction_x
+        o_local[..., 1] = c_o_length * o_direction_y
+        
+        return {
+            'N': n_local,
+            'CA': ca_local,
+            'C': c_local,
+            'O': o_local
+        }
+
+    def save(self, filepath: Union[str, Path], save_as_instance: bool = True) -> None:
+        """
+        保存 Frame 数据到文件。
         
         Args:
-            coords: 形状为 (..., num_residues, num_atoms, 3) 的输入坐标
-            
-        Returns:
-            torch.Tensor: 变换后的坐标，形状与输入相同
-            
-        Notes:
-            变换公式：new_coords = rotation @ coords + translation
+            filepath: 保存路径，推荐使用 .pt 扩展名
+            save_as_instance: 如果为 True，保存完整的 Frame 实例；
+                            如果为 False，保存为字典格式
         """
-        logger.debug("应用刚体变换到坐标")
+        filepath = Path(filepath)
         
-        # TODO: 实现刚体变换应用
-        # 1. 验证输入坐标的形状
-        # 2. 应用旋转变换：R @ coords
-        # 3. 应用平移变换：+ translation
-        # 4. 处理批处理维度
-        
-        raise NotImplementedError("刚体变换应用功能尚未实现")
-    
-    def compose_transforms(self, other: "Frame") -> "Frame":
+        if save_as_instance:
+            # 直接保存 Frame 实例
+            torch.save(self, filepath)
+            logger.info(f"Frame 实例已保存到: {filepath}")
+        else:
+            # 保存为字典格式
+            data_dict = {
+                'translations': self.translations,
+                'rotations': self.rotations,
+                'res_mask': self.res_mask,
+                'chain_ids': self.chain_ids,
+                'residue_types': self.residue_types,
+                'residue_indices': self.residue_indices,
+                'chain_residue_indices': self.chain_residue_indices,
+                'residue_names': self.residue_names,
+                'metadata': {
+                    'format': 'frame_dict',
+                    'version': '1.0',
+                    'num_residues': self.num_residues,
+                    'num_chains': self.num_chains,
+                    'device': str(self.device)
+                }
+            }
+            torch.save(data_dict, filepath)
+            logger.info(f"Frame 字典已保存到: {filepath}")
+
+    @classmethod
+    def load(cls, filepath: Union[str, Path], map_location: Optional[str] = None) -> 'Frame':
         """
-        组合两个刚体变换。
+        从文件加载 Frame 数据。
         
         Args:
-            other: 另一个 Frame 实例
+            filepath: 文件路径
+            map_location: 设备映射位置，如 'cpu', 'cuda' 等
             
         Returns:
-            Frame: 组合后的 Frame 实例
+            Frame: 加载的 Frame 实例
             
-        Notes:
-            组合公式：
-            - new_rotation = self.rotation @ other.rotation
-            - new_translation = self.rotation @ other.translation + self.translation
+        Raises:
+            ValueError: 如果文件格式不正确
         """
-        logger.debug("组合两个刚体变换")
+        filepath = Path(filepath)
+        if not filepath.exists():
+            raise FileNotFoundError(f"文件不存在: {filepath}")
         
-        # TODO: 实现变换组合
-        # 1. 验证两个Frame的兼容性
-        # 2. 计算组合的旋转矩阵
-        # 3. 计算组合的平移向量
-        # 4. 保持其他元数据
+        # 加载数据
+        data = torch.load(filepath, map_location=map_location, weights_only=False)
         
-        raise NotImplementedError("变换组合功能尚未实现")
-    
-    def inverse_transform(self) -> "Frame":
+        # 判断是实例还是字典
+        if isinstance(data, cls):
+            # 直接是 Frame 实例
+            logger.info(f"从 {filepath} 加载 Frame 实例")
+            return data
+        elif isinstance(data, dict):
+            # 是字典格式，需要重构实例
+            if 'metadata' in data and data['metadata'].get('format') == 'frame_dict':
+                # 标准的 Frame 字典格式
+                logger.info(f"从 {filepath} 加载 Frame 字典并重构实例")
+                return cls(
+                    translations=data['translations'],
+                    rotations=data['rotations'],
+                    res_mask=data['res_mask'],
+                    chain_ids=data['chain_ids'],
+                    residue_types=data['residue_types'],
+                    residue_indices=data['residue_indices'],
+                    chain_residue_indices=data['chain_residue_indices'],
+                    residue_names=data['residue_names']
+                )
+            else:
+                # 尝试从通用字典格式重构
+                logger.warning(f"从 {filepath} 加载的字典格式不标准，尝试重构")
+                return cls(
+                    translations=data['translations'],
+                    rotations=data['rotations'],
+                    res_mask=data['res_mask'],
+                    chain_ids=data['chain_ids'],
+                    residue_types=data['residue_types'],
+                    residue_indices=data['residue_indices'],
+                    chain_residue_indices=data['chain_residue_indices'],
+                    residue_names=data['residue_names']
+                )
+        else:
+            raise ValueError(f"无法识别的文件格式: {type(data)}")
+
+    def to_cif(self, output_path: str) -> None:
         """
-        计算逆变换。
-        
-        Returns:
-            Frame: 逆变换的 Frame 实例
-            
-        Notes:
-            逆变换公式：
-            - inv_rotation = rotation.transpose(-1, -2)
-            - inv_translation = -inv_rotation @ translation
-        """
-        logger.debug("计算逆变换")
-        
-        # TODO: 实现逆变换计算
-        # 1. 计算旋转矩阵的转置（逆矩阵）
-        # 2. 计算逆平移向量
-        # 3. 保持其他元数据
-        
-        raise NotImplementedError("逆变换计算功能尚未实现")
-    
-    def interpolate_frames(
-        self, 
-        other: "Frame", 
-        alpha: Union[float, torch.Tensor]
-    ) -> "Frame":
-        """
-        在两个 Frame 之间进行插值。
+        将 Frame 数据转换并保存为 CIF 文件。
         
         Args:
-            other: 目标 Frame 实例
-            alpha: 插值系数，0.0 返回 self，1.0 返回 other
-            
-        Returns:
-            Frame: 插值后的 Frame 实例
-            
-        Notes:
-            - 平移向量使用线性插值
-            - 旋转矩阵使用球面线性插值（SLERP）或四元数插值
+            output_path: 输出 CIF 文件路径
         """
-        logger.debug("在两个Frame之间插值")
-        
-        # TODO: 实现Frame插值
-        # 1. 验证两个Frame的兼容性
-        # 2. 平移向量线性插值
-        # 3. 旋转矩阵球面插值（通过四元数）
-        # 4. 保持其他元数据
-        
-        raise NotImplementedError("Frame插值功能尚未实现")
-    
-    def compute_backbone_coords(self) -> torch.Tensor:
-        """
-        使用Frame信息重建主链原子坐标。
-        
-        Returns:
-            torch.Tensor: 形状为 (num_residues, 4, 3) 的主链原子坐标 (N, CA, C, O)
-            
-        Notes:
-            使用标准的主链几何参数重建原子坐标
-        """
-        # TODO: 实现主链坐标重建
-        # 1. 使用标准的键长和键角
-        # 2. 应用刚体变换到标准坐标
-        # 3. 生成 N, CA, C, O 原子坐标
-        
-        raise NotImplementedError("主链坐标重建功能尚未实现")
-    
-    def compute_relative_frames(self) -> torch.Tensor:
-        """
-        计算相邻残基之间的相对变换。
-        
-        Returns:
-            torch.Tensor: 形状为 (num_residues-1, 4, 4) 的齐次变换矩阵
-            
-        Notes:
-            用于分析蛋白质的局部几何变化
-        """
-        # TODO: 实现相对变换计算
-        # 1. 计算相邻残基的变换关系
-        # 2. 构造齐次变换矩阵
-        # 3. 处理链的边界情况
-        
-        raise NotImplementedError("相对变换计算功能尚未实现") 
+        save_frame_to_cif(self, output_path)
+        logger.info(f"Frame 数据已转换并保存为 CIF 文件: {output_path}") 

@@ -11,7 +11,7 @@ Atom14 表示转换器 (优化版本)
 
 import logging
 from typing import List, Dict, Tuple, Optional, Any, Union
-
+from pathlib import Path
 import torch
 from protein_tensor import ProteinTensor, save_structure
 
@@ -844,7 +844,7 @@ def get_atom14_atom_positions() -> Dict[str, int]:
 
 def save_atom14_to_cif(
     atom14: Any,  # Atom14 类型
-    output_path: str,
+    output_path: Union[str, Path],
     title: str = "ProtRepr Atom14 Structure"
 ) -> None:
     """
@@ -863,7 +863,7 @@ def save_atom14_to_cif(
 
 def save_protein_tensor_to_cif(
     protein_tensor: ProteinTensor,
-    output_path: str,
+    output_path: Union[str, Path],
     title: str = "ProtRepr Reconstructed Structure"
 ) -> None:
     """

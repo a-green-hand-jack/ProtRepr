@@ -336,10 +336,10 @@ def reconstruct_backbone_from_rigid_transforms(
         
     Returns:
         Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-            - n_coords: N 原子坐标
-            - ca_coords: CA 原子坐标  
-            - c_coords: C 原子坐标
-            - o_coords: O 原子坐标
+            - n_coords: N 原子坐标, shape: (..., 3)
+            - ca_coords: CA 原子坐标, shape: (..., 3)  
+            - c_coords: C 原子坐标, shape: (..., 3)
+            - o_coords: O 原子坐标, shape: (..., 3)
             
     Notes:
         使用标准的主链几何参数：

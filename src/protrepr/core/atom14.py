@@ -450,7 +450,7 @@ class Atom14:
         else:
             raise ValueError(f"无法识别的文件格式: {type(data)}")
 
-    def to_cif(self, output_path: Union[str, Path]) -> None:
+    def to_cif(self, output_path: str) -> None:
         """
         将 Atom14 数据转换并保存为 CIF 文件。
         
