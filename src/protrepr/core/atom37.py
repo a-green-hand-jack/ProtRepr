@@ -9,6 +9,7 @@ Atom37 蛋白质表示数据类
 - 存储完整的蛋白质元数据（链ID、残基类型、残基编号等）
 - 双向转换：ProteinTensor ↔ Atom37
 - PyTorch 原生支持，GPU 加速计算
+- 天然支持批量操作，所有张量支持任意 batch 维度
 - 完整的验证和设备管理功能
 - 涵盖20种标准氨基酸的所有重原子类型
 """
@@ -16,9 +17,10 @@ Atom37 蛋白质表示数据类
 import logging
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List, Union
-
+from pathlib import Path
 import torch
 from protein_tensor import ProteinTensor
+from ..representations.atom37_converter import protein_tensor_to_atom37, atom37_to_protein_tensor, validate_atom37_data, save_atom37_to_cif
 
 logger = logging.getLogger(__name__)
 
@@ -29,22 +31,27 @@ class Atom37:
     Atom37 蛋白质表示数据类。
     
     该类封装了基于 atom37 标准的蛋白质结构表示，包含坐标、掩码以及
-    完整的元数据信息。支持与 ProteinTensor 的双向转换。
+    完整的元数据信息。支持与 ProteinTensor 的双向转换，天然支持批量操作。
     
     Attributes:
-        coords: 形状为 (num_residues, 37, 3) 的原子坐标张量
-        mask: 形状为 (num_residues, 37) 的布尔掩码张量，标识真实原子
-        chain_ids: 形状为 (num_residues,) 的链标识符张量
-        residue_types: 形状为 (num_residues,) 的残基类型张量（氨基酸编号）
-        residue_indices: 形状为 (num_residues,) 的残基在链中的位置编号
-        residue_names: 长度为 num_residues 的残基名称列表（如 ['ALA', 'GLY', ...]）
-        atom_names: 长度为 37 的 atom37 标准原子名称列表
+        coords: 形状为 (..., num_residues, 37, 3) 的原子坐标张量
+        atom_mask: 形状为 (..., num_residues, 37) 的布尔掩码张量
+                   标识真实原子：1=真实存在的原子，0=填充的虚拟位置
+        res_mask: 形状为 (..., num_residues) 的布尔掩码张量
+                  标识真实残基：1=标准氨基酸残基，0=非标准或缺失残基
+        chain_ids: 形状为 (..., num_residues) 的链标识符张量
+        residue_types: 形状为 (..., num_residues) 的残基类型张量（氨基酸编号）
+        residue_indices: 形状为 (..., num_residues) 的残基在蛋白质中的全局编号
+                        支持链间 gap，如 A链:1-100, B链:200-300
+        chain_residue_indices: 形状为 (..., num_residues) 的残基在各自链中的局部编号
+        residue_names: 形状为 (..., num_residues) 的残基名称张量（整数编码）
+        atom_names: 形状为 (37,) 的 atom37 标准原子名称张量（整数编码）
         
     Properties:
         device: 张量所在的设备
+        batch_shape: 批量维度的形状
         num_residues: 残基数量
         num_chains: 链的数量
-        num_atoms_per_residue: 每个残基的原子数量 (37)
         
     Methods:
         from_protein_tensor: 从 ProteinTensor 创建 Atom37 实例的类方法
@@ -54,25 +61,26 @@ class Atom37:
         get_chain_residues: 获取指定链的残基范围
         get_backbone_coords: 获取主链原子坐标
         get_sidechain_coords: 获取侧链原子坐标
-        get_residue_atoms: 获取指定残基的所有原子坐标
     """
     
     # 坐标和掩码数据
-    coords: torch.Tensor  # (num_residues, 37, 3)
-    mask: torch.Tensor    # (num_residues, 37)
+    coords: torch.Tensor              # (..., num_residues, 37, 3)
+    atom_mask: torch.Tensor           # (..., num_residues, 37) - 1=真实原子, 0=填充
+    res_mask: torch.Tensor            # (..., num_residues) - 1=标准残基, 0=非标准/缺失
     
     # 蛋白质元数据
-    chain_ids: torch.Tensor       # (num_residues,) - 链标识符
-    residue_types: torch.Tensor   # (num_residues,) - 残基类型编号
-    residue_indices: torch.Tensor # (num_residues,) - 残基在链中的位置
-    residue_names: List[str]      # 残基名称列表，如 ['ALA', 'GLY', ...]
+    chain_ids: torch.Tensor           # (..., num_residues) - 链标识符
+    residue_types: torch.Tensor       # (..., num_residues) - 残基类型编号
+    residue_indices: torch.Tensor     # (..., num_residues) - 全局残基编号（支持链间gap）
+    chain_residue_indices: torch.Tensor  # (..., num_residues) - 链内局部编号
     
-    # atom37 原子名称映射
-    atom_names: List[str]         # 37个标准原子名称
+    # 名称映射（张量化）
+    residue_names: torch.Tensor       # (..., num_residues) - 残基名称编码
+    atom_names: torch.Tensor          # (37,) - atom37 原子名称编码
     
     # 可选的额外元数据
-    b_factors: Optional[torch.Tensor] = None      # (num_residues, 37) - B因子
-    occupancies: Optional[torch.Tensor] = None   # (num_residues, 37) - 占用率
+    b_factors: Optional[torch.Tensor] = None      # (..., num_residues, 37) - B因子
+    occupancies: Optional[torch.Tensor] = None   # (..., num_residues, 37) - 占用率
     
     def __post_init__(self) -> None:
         """
@@ -82,14 +90,57 @@ class Atom37:
             ValueError: 当数据形状或类型不符合要求时
         """
         logger.debug("初始化 Atom37 数据类")
-        # TODO: 实现初始化后验证
-        # 1. 验证张量形状的一致性
-        # 2. 验证数据类型
-        # 3. 验证 atom_names 长度为 37
-        # 4. 验证 residue_names 长度与 num_residues 一致
-        # 5. 验证坐标和掩码的形状匹配
-        pass
-    
+        
+        # 获取批量形状和残基数量
+        # coords 形状: (..., num_residues, 37, 3)
+        # 最后3个维度是: (num_residues, 37, 3)
+        batch_shape = self.coords.shape[:-3]  # 去掉最后三个维度
+        num_residues = self.coords.shape[-3]  # 倒数第三个维度是 num_residues
+        
+        # 验证坐标形状
+        expected_coords_shape = batch_shape + (num_residues, 37, 3)
+        if self.coords.shape != expected_coords_shape:
+            raise ValueError(f"坐标张量形状无效: {self.coords.shape}，期望 {expected_coords_shape}")
+        
+        # 验证原子掩码形状
+        expected_atom_mask_shape = batch_shape + (num_residues, 37)
+        if self.atom_mask.shape != expected_atom_mask_shape:
+            raise ValueError(f"原子掩码张量形状无效: {self.atom_mask.shape}，期望 {expected_atom_mask_shape}")
+        
+        # 验证残基掩码形状
+        expected_res_mask_shape = batch_shape + (num_residues,)
+        if self.res_mask.shape != expected_res_mask_shape:
+            raise ValueError(f"残基掩码张量形状无效: {self.res_mask.shape}，期望 {expected_res_mask_shape}")
+        
+        # 验证元数据张量形状
+        expected_meta_shape = batch_shape + (num_residues,)
+        
+        if self.chain_ids.shape != expected_meta_shape:
+            raise ValueError(f"链ID张量形状无效: {self.chain_ids.shape}，期望 {expected_meta_shape}")
+        
+        if self.residue_types.shape != expected_meta_shape:
+            raise ValueError(f"残基类型张量形状无效: {self.residue_types.shape}，期望 {expected_meta_shape}")
+        
+        if self.residue_indices.shape != expected_meta_shape:
+            raise ValueError(f"残基索引张量形状无效: {self.residue_indices.shape}，期望 {expected_meta_shape}")
+        
+        if self.chain_residue_indices.shape != expected_meta_shape:
+            raise ValueError(f"链内残基索引张量形状无效: {self.chain_residue_indices.shape}，期望 {expected_meta_shape}")
+        
+        if self.residue_names.shape != expected_meta_shape:
+            raise ValueError(f"残基名称张量形状无效: {self.residue_names.shape}，期望 {expected_meta_shape}")
+        
+        # 验证原子名称张量
+        if self.atom_names.shape != (37,):
+            raise ValueError(f"原子名称张量形状无效: {self.atom_names.shape}，期望 (37,)")
+        
+        # 验证可选属性
+        if self.b_factors is not None and self.b_factors.shape != expected_atom_mask_shape:
+            raise ValueError(f"B因子张量形状无效: {self.b_factors.shape}，期望 {expected_atom_mask_shape}")
+        
+        if self.occupancies is not None and self.occupancies.shape != expected_atom_mask_shape:
+            raise ValueError(f"占用率张量形状无效: {self.occupancies.shape}，期望 {expected_atom_mask_shape}")
+
     @classmethod
     def from_protein_tensor(
         cls,
@@ -119,17 +170,22 @@ class Atom37:
         """
         logger.info("从 ProteinTensor 创建 Atom37 实例")
         
-        # TODO: 实现从 ProteinTensor 到 Atom37 的转换
-        # 1. 验证 protein_tensor 使用了 torch 后端
-        # 2. 提取原子坐标和元数据
-        # 3. 根据 atom37 标准映射原子位置
-        # 4. 处理缺失原子的填充
-        # 5. 生成掩码张量标识真实原子
-        # 6. 提取链信息和残基信息
-        # 7. 处理设备转移
+        result = protein_tensor_to_atom37(protein_tensor, device)
+        (coords, atom_mask, res_mask, chain_ids, residue_types, residue_indices, 
+         chain_residue_indices, residue_names, atom_names) = result
         
-        raise NotImplementedError("从 ProteinTensor 转换功能尚未实现")
-    
+        return cls(
+            coords=coords,
+            atom_mask=atom_mask,
+            res_mask=res_mask,
+            chain_ids=chain_ids,
+            residue_types=residue_types,
+            residue_indices=residue_indices,
+            chain_residue_indices=chain_residue_indices,
+            residue_names=residue_names,
+            atom_names=atom_names
+        )
+
     def to_protein_tensor(self) -> ProteinTensor:
         """
         将 Atom37 实例转换为 ProteinTensor。
@@ -146,15 +202,19 @@ class Atom37:
         """
         logger.info("将 Atom37 转换为 ProteinTensor")
         
-        # TODO: 实现从 Atom37 到 ProteinTensor 的转换
-        # 1. 根据掩码提取真实原子坐标
-        # 2. 重建原子类型和残基信息
-        # 3. 构造 ProteinTensor 所需的数据结构
-        # 4. 确保使用 torch 后端
-        # 5. 保持原始的原子顺序和命名
         
-        raise NotImplementedError("转换为 ProteinTensor 功能尚未实现")
-    
+        return atom37_to_protein_tensor(
+            self.coords,
+            self.atom_mask,
+            self.res_mask,
+            self.chain_ids,
+            self.residue_types,
+            self.residue_indices,
+            self.chain_residue_indices,
+            self.residue_names,
+            self.atom_names
+        )
+
     def to_device(self, device: torch.device) -> "Atom37":
         """
         将所有张量移动到指定设备。
@@ -167,12 +227,35 @@ class Atom37:
         """
         logger.debug(f"将 Atom37 数据移动到设备: {device}")
         
-        # TODO: 实现设备转移
-        # 移动所有 torch.Tensor 属性到新设备
-        # 保持非张量属性不变
+        # 移动所有张量属性
+        coords = self.coords.to(device)
+        atom_mask = self.atom_mask.to(device)
+        res_mask = self.res_mask.to(device)
+        chain_ids = self.chain_ids.to(device)
+        residue_types = self.residue_types.to(device)
+        residue_indices = self.residue_indices.to(device)
+        chain_residue_indices = self.chain_residue_indices.to(device)
+        residue_names = self.residue_names.to(device)
+        atom_names = self.atom_names.to(device)
         
-        raise NotImplementedError("设备转移功能尚未实现")
-    
+        # 移动可选张量
+        b_factors = self.b_factors.to(device) if self.b_factors is not None else None
+        occupancies = self.occupancies.to(device) if self.occupancies is not None else None
+        
+        return Atom37(
+            coords=coords,
+            atom_mask=atom_mask,
+            res_mask=res_mask,
+            chain_ids=chain_ids,
+            residue_types=residue_types,
+            residue_indices=residue_indices,
+            chain_residue_indices=chain_residue_indices,
+            residue_names=residue_names,
+            atom_names=atom_names,
+            b_factors=b_factors,
+            occupancies=occupancies
+        )
+
     def validate(self) -> None:
         """
         验证 Atom37 数据的一致性和有效性。
@@ -181,37 +264,50 @@ class Atom37:
             ValueError: 当数据不一致或无效时
         """
         logger.debug("验证 Atom37 数据一致性")
-        
-        # TODO: 实现数据验证
-        # 1. 验证张量形状（coords: (N, 37, 3), mask: (N, 37)）
-        # 2. 验证数据类型
-        # 3. 验证坐标范围的合理性
-        # 4. 验证掩码的逻辑一致性
-        # 5. 验证元数据的一致性
-        # 6. 验证原子名称和残基名称的有效性
-        
-        raise NotImplementedError("数据验证功能尚未实现")
-    
+                
+        validate_atom37_data(
+            self.coords,
+            self.atom_mask,
+            self.res_mask,
+            self.chain_ids,
+            self.residue_types,
+            self.residue_indices,
+            self.chain_residue_indices,
+            self.residue_names,
+            self.atom_names
+        )
+
     @property
     def device(self) -> torch.device:
         """获取张量所在的设备。"""
         return self.coords.device
-    
+
+    @property
+    def batch_shape(self) -> torch.Size:
+        """获取批量维度的形状。"""
+        return self.coords.shape[:-3]
+
     @property
     def num_residues(self) -> int:
         """获取残基数量。"""
-        return self.coords.shape[0]
-    
+        return self.coords.shape[-3]
+
     @property
     def num_chains(self) -> int:
         """获取链的数量。"""
-        return len(torch.unique(self.chain_ids))
-    
+        # 对于批量数据，返回最后一个 batch 的链数量
+        if len(self.batch_shape) == 0:
+            return len(torch.unique(self.chain_ids))
+        else:
+            # 对于批量数据，取最后一个样本
+            last_sample_chain_ids = self.chain_ids[..., -1, :].flatten()
+            return len(torch.unique(last_sample_chain_ids))
+
     @property
     def num_atoms_per_residue(self) -> int:
         """获取每个残基的原子数量（固定为37）。"""
         return 37
-    
+
     def get_chain_residues(self, chain_id: Union[str, int]) -> torch.Tensor:
         """
         获取指定链的残基索引。
@@ -222,41 +318,56 @@ class Atom37:
         Returns:
             torch.Tensor: 属于该链的残基索引张量
         """
-        # TODO: 实现链残基查询
-        raise NotImplementedError("链残基查询功能尚未实现")
-    
+        if isinstance(chain_id, str):
+            # 如果传入字符串，尝试转换为数字
+            try:
+                chain_id = int(chain_id)
+            except ValueError:
+                raise ValueError(f"无法将链ID '{chain_id}' 转换为数字")
+        
+        chain_mask = self.chain_ids == chain_id
+        
+        # 对于批量数据，返回所有批次中匹配的残基
+        if len(self.batch_shape) == 0:
+            residue_indices = torch.where(chain_mask)[0]
+        else:
+            # 对于批量数据，返回布尔掩码
+            residue_indices = chain_mask
+        
+        return residue_indices
+
     def get_backbone_coords(self) -> torch.Tensor:
         """
         获取主链原子（N, CA, C, O）的坐标。
         
         Returns:
-            torch.Tensor: 形状为 (num_residues, 4, 3) 的主链原子坐标
+            torch.Tensor: 形状为 (..., num_residues, 4, 3) 的主链原子坐标
             
         Notes:
-            在 atom37 标准中，主链原子通常位于前4个位置：
+            在 atom37 标准中，主链原子位于前4个位置：
             - 位置 0: N (氮原子)
             - 位置 1: CA (α碳原子)  
             - 位置 2: C (羰基碳原子)
             - 位置 3: O (羰基氧原子)
         """
-        # TODO: 实现主链原子提取
-        # 提取前4个原子位置的坐标
-        raise NotImplementedError("主链原子提取功能尚未实现")
-    
+        # atom37 中主链原子位于前4个位置：N(0), CA(1), C(2), O(3)
+        backbone_coords = self.coords[..., :4, :]  # (..., num_residues, 4, 3)
+        return backbone_coords
+
     def get_sidechain_coords(self) -> torch.Tensor:
         """
         获取侧链原子的坐标。
         
         Returns:
-            torch.Tensor: 形状为 (num_residues, 33, 3) 的侧链原子坐标
+            torch.Tensor: 形状为 (..., num_residues, 33, 3) 的侧链原子坐标
             
         Notes:
             侧链原子位于 atom37 的位置 4-36（共33个位置）
         """
-        # TODO: 实现侧链原子提取
-        # 提取位置4-36的原子坐标
-        raise NotImplementedError("侧链原子提取功能尚未实现")
-    
+        # atom37 中侧链原子位于后33个位置：CB(4) 到 位置36
+        sidechain_coords = self.coords[..., 4:, :]  # (..., num_residues, 33, 3)
+        return sidechain_coords 
+
     def get_residue_atoms(self, residue_idx: int) -> Dict[str, torch.Tensor]:
         """
         获取指定残基的所有原子坐标。
@@ -271,21 +382,158 @@ class Atom37:
             >>> residue_atoms = atom37.get_residue_atoms(0)
             >>> ca_coord = residue_atoms['CA']  # 获取CA原子坐标
         """
-        # TODO: 实现单个残基原子提取
-        # 根据残基类型和掩码返回真实存在的原子
-        raise NotImplementedError("单个残基原子提取功能尚未实现")
-    
+        # 导入解码函数
+        from ..representations.atom37_converter import decode_atom_names
+        
+        # 获取该残基的坐标和掩码
+        if len(self.batch_shape) == 0:
+            # 非批量数据
+            residue_coords = self.coords[residue_idx]  # (37, 3)
+            residue_mask = self.atom_mask[residue_idx]  # (37,)
+        else:
+            # 批量数据，取最后一个样本
+            residue_coords = self.coords[..., -1, residue_idx, :, :]  # (37, 3)
+            residue_mask = self.atom_mask[..., -1, residue_idx, :]  # (37,)
+        
+        # 获取原子名称
+        atom_names_list = decode_atom_names(self.atom_names)
+        
+        # 构建字典，只包含真实存在的原子
+        result = {}
+        for atom_idx, (atom_name, coord, is_real) in enumerate(zip(atom_names_list, residue_coords, residue_mask)):
+            if is_real:
+                result[atom_name] = coord
+        
+        return result
+
     def compute_center_of_mass(self) -> torch.Tensor:
         """
         计算每个残基的质心坐标。
         
         Returns:
-            torch.Tensor: 形状为 (num_residues, 3) 的质心坐标
+            torch.Tensor: 形状为 (..., num_residues, 3) 的质心坐标
             
         Notes:
             只考虑掩码标识为True的真实原子
         """
-        # TODO: 实现质心计算
-        # 1. 根据掩码过滤真实原子
-        # 2. 计算每个残基的质心
-        raise NotImplementedError("质心计算功能尚未实现") 
+        # 根据掩码过滤真实原子
+        valid_coords = self.coords * self.atom_mask.unsqueeze(-1)  # 零化虚拟原子的坐标
+        
+        # 计算每个残基的真实原子数量
+        num_valid_atoms = self.atom_mask.sum(dim=-1, keepdim=True)  # (..., num_residues, 1)
+        
+        # 避免除零错误
+        num_valid_atoms = torch.clamp(num_valid_atoms, min=1)
+        
+        # 计算质心
+        center_of_mass = valid_coords.sum(dim=-2) / num_valid_atoms.squeeze(-1)  # (..., num_residues, 3)
+        
+        return center_of_mass
+
+    def save(self, filepath: Union[str, Path], save_as_instance: bool = True) -> None:
+        """
+        保存 Atom37 数据到文件。
+        
+        Args:
+            filepath: 保存路径，推荐使用 .pt 扩展名
+            save_as_instance: 如果为 True，保存完整的 Atom37 实例；
+                            如果为 False，保存为字典格式
+        """
+        filepath = Path(filepath)
+        
+        if save_as_instance:
+            # 直接保存 Atom37 实例
+            torch.save(self, filepath)
+            logger.info(f"Atom37 实例已保存到: {filepath}")
+        else:
+            # 保存为字典格式
+            data_dict = {
+                'coords': self.coords,
+                'atom_mask': self.atom_mask,
+                'res_mask': self.res_mask,
+                'chain_ids': self.chain_ids,
+                'residue_types': self.residue_types,
+                'residue_indices': self.residue_indices,
+                'chain_residue_indices': self.chain_residue_indices,
+                'residue_names': self.residue_names,
+                'atom_names': self.atom_names,
+                'metadata': {
+                    'format': 'atom37_dict',
+                    'version': '1.0',
+                    'num_residues': self.num_residues,
+                    'num_chains': self.num_chains,
+                    'device': str(self.device)
+                }
+            }
+            torch.save(data_dict, filepath)
+            logger.info(f"Atom37 字典已保存到: {filepath}")
+
+    @classmethod
+    def load(cls, filepath: Union[str, Path], map_location: Optional[str] = None) -> 'Atom37':
+        """
+        从文件加载 Atom37 数据。
+        
+        Args:
+            filepath: 文件路径
+            map_location: 设备映射位置，如 'cpu', 'cuda' 等
+            
+        Returns:
+            Atom37: 加载的 Atom37 实例
+            
+        Raises:
+            ValueError: 如果文件格式不正确
+        """
+        filepath = Path(filepath)
+        if not filepath.exists():
+            raise FileNotFoundError(f"文件不存在: {filepath}")
+        
+        # 加载数据
+        data = torch.load(filepath, map_location=map_location, weights_only=False)
+        
+        # 判断是实例还是字典
+        if isinstance(data, cls):
+            # 直接是 Atom37 实例
+            logger.info(f"从 {filepath} 加载 Atom37 实例")
+            return data
+        elif isinstance(data, dict):
+            # 是字典格式，需要重构实例
+            if 'metadata' in data and data['metadata'].get('format') == 'atom37_dict':
+                # 标准的 Atom37 字典格式
+                logger.info(f"从 {filepath} 加载 Atom37 字典并重构实例")
+                return cls(
+                    coords=data['coords'],
+                    atom_mask=data['atom_mask'],
+                    res_mask=data['res_mask'],
+                    chain_ids=data['chain_ids'],
+                    residue_types=data['residue_types'],
+                    residue_indices=data['residue_indices'],
+                    chain_residue_indices=data['chain_residue_indices'],
+                    residue_names=data['residue_names'],
+                    atom_names=data['atom_names']
+                )
+            else:
+                # 尝试从通用字典格式重构
+                logger.warning(f"从 {filepath} 加载的字典格式不标准，尝试重构")
+                return cls(
+                    coords=data['coords'],
+                    atom_mask=data['atom_mask'],
+                    res_mask=data['res_mask'],
+                    chain_ids=data['chain_ids'],
+                    residue_types=data['residue_types'],
+                    residue_indices=data['residue_indices'],
+                    chain_residue_indices=data['chain_residue_indices'],
+                    residue_names=data['residue_names'],
+                    atom_names=data['atom_names']
+                )
+        else:
+            raise ValueError(f"无法识别的文件格式: {type(data)}")
+
+    def to_cif(self, output_path: Union[str, Path]) -> None:
+        """
+        将 Atom37 数据转换并保存为 CIF 文件。
+        
+        Args:
+            output_path: 输出 CIF 文件路径
+        """
+        save_atom37_to_cif(self, str(output_path))
+        logger.info(f"Atom37 数据已转换并保存为 CIF 文件: {output_path}") 
