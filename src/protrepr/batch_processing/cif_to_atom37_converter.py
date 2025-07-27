@@ -365,5 +365,5 @@ def save_statistics(statistics: Dict[str, Any], output_path: Union[str, Path]) -
         output_path: 输出文件路径
     """
     # 直接导入避免循环导入
-    from .atom14_batch_converter import save_statistics as _save_statistics
+    from .cif_to_atom14_converter import save_statistics as _save_statistics
     _save_statistics(statistics, Path(output_path)) 
