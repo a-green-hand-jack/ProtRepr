@@ -11,7 +11,7 @@ __author__ = "ProtRepr Team"
 # 核心数据结构
 from .core.atom14 import Atom14
 from .core.atom37 import Atom37  
-# from .core.frame import Frame    # TODO: 实现
+from .core.frame import Frame    # TODO: 实现
 
 # 批量处理功能
 from .batch_processing import (
@@ -24,7 +24,7 @@ __all__ = [
     # 核心类
     "Atom14",
     "Atom37",  
-    # "Frame",   # TODO: 实现后启用
+    "Frame",   # TODO: 实现后启用
     
     # 批量处理
     "BatchPDBToAtom14Converter",

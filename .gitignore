@@ -139,6 +139,7 @@ experiments/
 checkpoints/
 models/
 *.pt
+tmp.py
 
 # Development
 .pytest_cache/

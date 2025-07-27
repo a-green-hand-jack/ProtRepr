@@ -158,7 +158,7 @@ from protein_tensor import load_structure
 from protrepr import Atom14, Atom37, Frame
 
 # 加载蛋白质结构（强制使用 PyTorch 后端）
-protein_pt = load_structure("protein.pdb", backend='torch')
+protein_pt = load_structure("protein.pdb")
 
 # 创建三种不同的表示格式
 atom14 = Atom14.from_protein_tensor(protein_pt)
@@ -319,14 +319,10 @@ print(f"转换失败: {statistics['failed']} 个文件")
 
 ### 1. PyTorch 后端要求
 
-**关键**: ProtRepr 项目强制要求使用 PyTorch 后端。在使用 `protein_tensor.load_structure()` 时，必须显式指定 `backend='torch'`：
+**关键**: ProtRepr 项目强制要求使用 PyTorch 后端。在使用 `protein_tensor.load_structure()` 时，无需调整,因为这个方法默认返回 `torch.Tensor` 类型的张量。
 
 ```python
-# 正确用法
-protein_pt = load_structure("protein.pdb", backend='torch')
-
-# 错误用法（会导致后续操作失败）
-protein_np = load_structure("protein.pdb", backend='numpy')
+protein_pt = load_structure("protein.pdb")
 ```
 
 ### 2. 设备管理
@@ -344,6 +340,7 @@ protein_np = load_structure("protein.pdb", backend='numpy')
 ### 4. 文件格式兼容性
 
 - 支持的输入格式：PDB、CIF、ENT、MMCIF
+  - 但是,目前仅测试了 PDB 和 CIF 格式,对其他格式的兼容性未知,请谨慎使用.
 - 输出的PyTorch文件使用 `.pt` 扩展名
 - CIF输出完全兼容标准格式
 
