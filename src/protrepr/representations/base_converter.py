@@ -68,7 +68,7 @@ def create_residue_name_tensor(residue_names: List[str], device: torch.device) -
         if name in RESIDUE_NAME_TO_IDX:
             residue_indices.append(RESIDUE_NAME_TO_IDX[name])
         else:
-            logger.warning(f"未知残基名称: {name}，使用 UNK (20)")
+            # 静默处理未知残基，使用 UNK (20)
             residue_indices.append(20)  # UNK 残基
     
     return torch.tensor(residue_indices, dtype=torch.long, device=device)
