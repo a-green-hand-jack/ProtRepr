@@ -16,6 +16,17 @@ from pathlib import Path
 import torch
 from protein_tensor import ProteinTensor, save_structure
 
+# 导入基础转换器的共同功能
+from .base_converter import (
+    RESIDUE_NAME_TO_IDX, IDX_TO_RESIDUE_NAME, CHAIN_GAP,
+    create_residue_name_tensor, decode_residue_names,
+    find_residue_boundaries_vectorized, compute_chain_info_vectorized,
+    compute_global_residue_indices_vectorized, TempProteinTensor,
+    save_protein_tensor_to_cif
+)
+from .base_converter import create_atom_name_tensor as _create_atom_name_tensor
+from .base_converter import decode_atom_names as _decode_atom_names
+
 logger = logging.getLogger(__name__)
 
 # ================================
@@ -63,37 +74,11 @@ ATOM37_ATOM_TYPES = [
     "OXT"     # 36 - C端额外氧（可选）
 ]
 
-# 残基名称到索引的映射
-RESIDUE_NAME_TO_IDX = {
-    "ALA": 0, "ARG": 1, "ASN": 2, "ASP": 3, "CYS": 4,
-    "GLN": 5, "GLU": 6, "GLY": 7, "HIS": 8, "ILE": 9,
-    "LEU": 10, "LYS": 11, "MET": 12, "PHE": 13, "PRO": 14,
-    "SER": 15, "THR": 16, "TRP": 17, "TYR": 18, "VAL": 19
-}
-
-# 索引到残基名称的映射
-IDX_TO_RESIDUE_NAME = {v: k for k, v in RESIDUE_NAME_TO_IDX.items()}
-
 # 原子名称到索引的映射
 ATOM_NAME_TO_IDX = {name: idx for idx, name in enumerate(ATOM37_ATOM_TYPES)}
 
 # 索引到原子名称的映射
 IDX_TO_ATOM_NAME = {idx: name for idx, name in enumerate(ATOM37_ATOM_TYPES)}
-
-# 标准键长和键角常量（继承自 Atom14）
-STANDARD_BOND_LENGTHS = {
-    "CA_CB": 1.526,  # CA-CB 键长 (Å)
-    "CA_N": 1.458,   # CA-N 键长 (Å) 
-    "CA_C": 1.525,   # CA-C 键长 (Å)
-}
-
-STANDARD_BOND_ANGLES = {
-    "N_CA_CB": 110.5,  # N-CA-CB 键角 (度)
-    "C_CA_CB": 110.1,  # C-CA-CB 键角 (度)
-}
-
-# 链间间隔设置
-CHAIN_GAP = 200  # 不同链之间的残基编号间隔
 
 # ================================
 # AlphaFold 标准 Atom37 原子映射
@@ -155,30 +140,8 @@ RESIDUE_ATOM37_MAPPING: Dict[str, Dict[str, int]] = {
 
 
 # ================================
-# 张量化名称处理函数（复用 Atom14 逻辑）
+# Atom37 专用包装函数
 # ================================
-
-def create_residue_name_tensor(residue_names: List[str], device: torch.device) -> torch.Tensor:
-    """
-    将残基名称列表转换为张量（整数编码）。
-    
-    Args:
-        residue_names: 残基名称列表
-        device: 目标设备
-        
-    Returns:
-        torch.Tensor: 编码后的残基名称张量
-    """
-    residue_indices = []
-    for name in residue_names:
-        if name in RESIDUE_NAME_TO_IDX:
-            residue_indices.append(RESIDUE_NAME_TO_IDX[name])
-        else:
-            logger.warning(f"未知残基名称: {name}，使用 UNK (20)")
-            residue_indices.append(20)  # UNK 残基
-    
-    return torch.tensor(residue_indices, dtype=torch.long, device=device)
-
 
 def create_atom_name_tensor(device: torch.device) -> torch.Tensor:
     """
@@ -190,26 +153,7 @@ def create_atom_name_tensor(device: torch.device) -> torch.Tensor:
     Returns:
         torch.Tensor: 编码后的原子名称张量 (37,)
     """
-    return torch.arange(37, dtype=torch.long, device=device)
-
-
-def decode_residue_names(residue_tensor: torch.Tensor) -> List[str]:
-    """
-    将残基名称张量解码为字符串列表。
-    
-    Args:
-        residue_tensor: 编码的残基名称张量
-        
-    Returns:
-        List[str]: 解码后的残基名称列表
-    """
-    names = []
-    for idx in residue_tensor.cpu().numpy():
-        if idx in IDX_TO_RESIDUE_NAME:
-            names.append(IDX_TO_RESIDUE_NAME[idx])
-        else:
-            names.append("UNK")
-    return names
+    return _create_atom_name_tensor(37, device)
 
 
 def decode_atom_names(atom_tensor: torch.Tensor) -> List[str]:
@@ -222,107 +166,12 @@ def decode_atom_names(atom_tensor: torch.Tensor) -> List[str]:
     Returns:
         List[str]: 解码后的原子名称列表
     """
-    names = []
-    for idx in atom_tensor.cpu().numpy():
-        if idx in IDX_TO_ATOM_NAME:
-            names.append(IDX_TO_ATOM_NAME[idx])
-        else:
-            names.append(f"UNK{idx}")
-    return names
+    return _decode_atom_names(atom_tensor, IDX_TO_ATOM_NAME)
 
 
 # ================================
-# 导入 Atom14 的优化向量化函数
+# Atom37 专用的向量化辅助函数
 # ================================
-
-def find_residue_boundaries_vectorized(chain_ids: torch.Tensor, residue_numbers: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    使用向量化操作找到每个残基的边界（复用 Atom14 实现）。
-    """
-    num_atoms = len(chain_ids)
-    device = chain_ids.device
-    
-    # 创建残基唯一标识符
-    max_residue_num = residue_numbers.max().item() + 1
-    residue_ids = chain_ids * max_residue_num + residue_numbers
-    
-    # 找到残基变化的位置
-    padded_ids = torch.cat([residue_ids[:1] - 1, residue_ids])
-    changes = (padded_ids[1:] != padded_ids[:-1])
-    
-    # 残基起始位置
-    residue_starts = torch.nonzero(changes, as_tuple=True)[0]
-    
-    # 残基结束位置
-    residue_ends = torch.cat([residue_starts[1:], torch.tensor([num_atoms], device=device)])
-    
-    return residue_starts, residue_ends
-
-
-def compute_chain_info_vectorized(chain_ids: torch.Tensor, residue_starts: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    使用向量化操作计算链信息（复用 Atom14 实现）。
-    """
-    device = chain_ids.device
-    num_residues = len(residue_starts)
-    
-    # 获取每个残基的链ID
-    residue_chain_ids = chain_ids[residue_starts]
-    
-    # 获取唯一的链ID（保持顺序）
-    unique_chains, inverse_indices = torch.unique(residue_chain_ids, return_inverse=True, sorted=True)
-    
-    # 计算每条链的残基数量
-    chain_residue_counts = torch.bincount(inverse_indices)
-    
-    return unique_chains, chain_residue_counts, residue_chain_ids
-
-
-def compute_global_residue_indices_vectorized(
-    residue_chain_ids: torch.Tensor,
-    unique_chains: torch.Tensor,
-    chain_residue_counts: torch.Tensor
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    使用向量化操作计算全局残基编号（复用 Atom14 实现）。
-    """
-    device = residue_chain_ids.device
-    num_residues = len(residue_chain_ids)
-    num_chains = len(unique_chains)
-    
-    # 计算每条链的全局起始编号
-    chain_start_indices = torch.zeros(num_chains, device=device, dtype=torch.long)
-    
-    current_start = 1  # 从1开始编号
-    for i in range(num_chains):
-        chain_start_indices[i] = current_start
-        if i < num_chains - 1:  # 不是最后一条链
-            current_start += chain_residue_counts[i] + CHAIN_GAP
-    
-    # 为每个残基分配全局编号
-    global_residue_indices = torch.zeros(num_residues, device=device, dtype=torch.long)
-    chain_residue_indices = torch.zeros(num_residues, device=device, dtype=torch.long)
-    
-    # 为每条链单独处理
-    for chain_idx, chain_id in enumerate(unique_chains.tolist()):
-        chain_mask = (residue_chain_ids == chain_id)
-        chain_residue_count = chain_residue_counts[chain_idx].item()
-        start_index = chain_start_indices[chain_idx].item()
-        
-        # 生成这条链的全局编号和链内编号
-        chain_global_indices = torch.arange(
-            start_index, start_index + chain_residue_count, 
-            device=device, dtype=torch.long
-        )
-        chain_local_indices = torch.arange(
-            chain_residue_count, device=device, dtype=torch.long
-        )
-        
-        # 分配到对应位置
-        global_residue_indices[chain_mask] = chain_global_indices
-        chain_residue_indices[chain_mask] = chain_local_indices
-    
-    return global_residue_indices, chain_residue_indices
 
 
 def map_atoms_to_atom37_vectorized(
@@ -591,26 +440,7 @@ def atom37_to_protein_tensor(
     final_chain_ids = torch.tensor(all_chain_ids, dtype=torch.long).cpu().numpy()
     final_residue_numbers = torch.tensor(all_residue_numbers, dtype=torch.long).cpu().numpy()
     
-    # 创建临时 ProteinTensor 对象
-    class TempProteinTensor:
-        def __init__(self, coords, atom_types, residue_types, chain_ids, residue_numbers):
-            self.coordinates = coords
-            self.atom_types = atom_types
-            self.residue_types = residue_types
-            self.chain_ids = chain_ids
-            self.residue_numbers = residue_numbers
-            self.n_atoms = len(coords)
-            self.n_residues = len(set((c, r) for c, r in zip(chain_ids, residue_numbers)))
-        
-        def _tensor_to_numpy(self, tensor):
-            """将张量转换为 numpy 数组（模拟 ProteinTensor 的方法）"""
-            if hasattr(tensor, 'cpu'):
-                return tensor.cpu().numpy()
-            return tensor
-        
-        def save_structure(self, output_path: str, format_type: str = "cif"):
-            """保存结构到文件"""
-            save_structure(self, output_path, format_type=format_type)  # type: ignore
+    # 使用基础转换器的 TempProteinTensor 类
     
     return TempProteinTensor(
         final_coords,
@@ -761,19 +591,3 @@ def save_atom37_to_cif(
     logger.info(f"CIF 文件保存成功: {output_path}")
 
 
-def save_protein_tensor_to_cif(
-    protein_tensor: ProteinTensor,
-    output_path: Union[str, Path],
-    title: str = "ProtRepr Reconstructed Structure"
-) -> None:
-    """
-    将 ProteinTensor 数据保存为 CIF 文件。
-    
-    Args:
-        protein_tensor: ProteinTensor 实例或兼容对象
-        output_path: 输出文件路径  
-        title: 结构标题
-    """
-    logger.info(f"将 ProteinTensor 数据保存到 CIF 文件: {output_path}")
-    save_structure(protein_tensor, output_path, format_type="cif")
-    logger.info(f"CIF 文件保存成功: {output_path}") 
