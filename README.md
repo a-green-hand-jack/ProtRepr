@@ -31,7 +31,7 @@ ProtRepr 是一个基于开源库 [ProteinTensor](https://github.com/a-green-han
 
 ## 🔧 技术特色
 
-- **PyTorch-Native**: 所有计算直接在 GPU 上完成，避免不必要的数据传输
+- **PyTorch-Native**: 所有计算支持在 GPU 上完成，但是不强制要求使用 GPU，支持 CPU 计算,而且经测试 CPU 计算已经足够高效
 - **强制 PyTorch 后端**: 确保与深度学习工作流的无缝集成
 - **高性能**: 优化的张量操作，支持批处理和自动微分
 - **可扩展**: 模块化设计，易于集成新的表示方法和模型架构
@@ -48,11 +48,21 @@ ProtRepr 是一个基于开源库 [ProteinTensor](https://github.com/a-green-han
 ### 从 GitHub 安装
 
 ```bash
-# 使用 uv（推荐）
-uv pip install git+ssh://git@github.com/a-green-hand-jack/ProtRepr.git
+# 使用 ssh 安装
 
-# 使用 pip
+## 使用 uv（推荐）
+uv pip install git+ssh://git@github.com/a-green-hand-jack/ProtRepr.git
+## 使用 pip
+
 pip install git+ssh://git@github.com/a-green-hand-jack/ProtRepr.git
+
+# 使用 https 安装
+
+## 使用 uv（推荐）
+uv pip install git+https://github.com/a-green-hand-jack/ProtRepr.git
+
+## 使用 pip
+pip install git+https://github.com/a-green-hand-jack/ProtRepr.git
 ```
 
 ### 开发安装
@@ -171,117 +181,257 @@ print(f"Frame translations: {frame.translations.shape}")  # (num_residues, 3)
 print(f"Frame rotations: {frame.rotations.shape}")        # (num_residues, 3, 3)
 ```
 
-### 核心类详细用法
+### 核心类完整 API 参考
 
-#### 1. Atom14 类
+#### 1. Atom14 类 - 紧凑型原子表示
+
+##### 数据属性 (Data Attributes)
+
+```python
+# 核心坐标和掩码数据
+coords: torch.Tensor                    # (..., num_residues, 14, 3) - 原子坐标
+atom_mask: torch.Tensor                 # (..., num_residues, 14) - 原子掩码 (1=真实, 0=填充)
+res_mask: torch.Tensor                  # (..., num_residues) - 残基掩码 (1=标准, 0=非标准)
+
+# 蛋白质元数据
+chain_ids: torch.Tensor                 # (..., num_residues) - 链标识符编码
+residue_types: torch.Tensor             # (..., num_residues) - 残基类型编号 (0-19)
+residue_indices: torch.Tensor           # (..., num_residues) - 全局残基编号 (支持链间gap)
+chain_residue_indices: torch.Tensor     # (..., num_residues) - 链内局部编号
+residue_names: torch.Tensor             # (..., num_residues) - 残基名称编码
+atom_names: torch.Tensor                # (14,) - atom14 原子名称编码
+
+# 可选属性
+b_factors: Optional[torch.Tensor]       # (..., num_residues, 14) - B因子
+occupancies: Optional[torch.Tensor]     # (..., num_residues, 14) - 占用率
+```
+
+##### 属性方法 (Properties)
+
+```python
+device: torch.device                    # 张量所在设备
+batch_shape: torch.Size                 # 批量维度形状 (...)
+num_residues: int                       # 残基数量
+num_chains: int                         # 链数量
+```
+
+##### 类方法 (Class Methods)
 
 ```python
 # 创建和加载
+Atom14.from_protein_tensor(protein_tensor, device=None)  # 从 ProteinTensor 创建
+Atom14.load(filepath, map_location=None)                 # 从文件加载
+```
+
+##### 实例方法 (Instance Methods)
+
+```python
+# 核心转换方法
+to_protein_tensor() -> ProteinTensor    # 转换回 ProteinTensor
+to_device(device) -> Atom14             # 移动到指定设备
+validate() -> None                      # 验证数据一致性
+
+# 几何查询方法
+get_backbone_coords() -> torch.Tensor   # 获取主链坐标 (..., num_residues, 4, 3)
+get_sidechain_coords() -> torch.Tensor  # 获取侧链坐标 (..., num_residues, 10, 3)
+get_chain_residues(chain_id) -> torch.Tensor  # 获取指定链的残基索引
+
+# 数据持久化
+save(filepath, save_as_instance=True)   # 保存数据到文件
+to_cif(output_path)                     # 导出为 CIF 文件
+```
+
+##### 使用示例
+
+```python
+# 创建和基本操作
 atom14 = Atom14.from_protein_tensor(protein_pt)
-
-# 属性访问
-coords = atom14.coords              # (num_residues, 14, 3) 原子坐标
-atom_mask = atom14.atom_mask        # (num_residues, 14) 原子掩码
-res_mask = atom14.res_mask          # (num_residues,) 残基掩码
-chain_ids = atom14.chain_ids        # (num_residues,) 链标识符
+print(f"形状: {atom14.coords.shape}")           # (num_residues, 14, 3)
+print(f"设备: {atom14.device}")                 # cpu 或 cuda
 
 # 几何操作
-backbone = atom14.get_backbone_coords()    # 获取主链原子坐标 (N, CA, C, O)
-sidechain = atom14.get_sidechain_coords()  # 获取侧链原子坐标
+backbone = atom14.get_backbone_coords()         # N, CA, C, O 原子坐标
+sidechain = atom14.get_sidechain_coords()       # CB 及其他侧链原子
+chain_a_residues = atom14.get_chain_residues(0) # A链残基索引
 
-# 链操作
-chain_residues = atom14.get_chain_residues('A')  # 获取A链的残基
-
-# 设备管理
+# 设备管理和保存
 atom14_gpu = atom14.to_device(torch.device("cuda"))
-atom14_cpu = atom14.to_device(torch.device("cpu"))
-
-# 保存和加载
-atom14.save("atom14_data.pt")  # 保存为实例
-atom14.save("atom14_dict.pt", save_as_instance=False)  # 保存为字典
-
-loaded_atom14 = Atom14.load("atom14_data.pt")
-
-# 转换回ProteinTensor
-protein_tensor = atom14.to_protein_tensor()
-
-# 导出为CIF文件
-atom14.to_cif("output.cif")
+atom14.save("data.pt", save_as_instance=True)   # 保存完整实例
+atom14.save("data_dict.pt", save_as_instance=False)  # 保存字典格式
 ```
 
-#### 2. Atom37 类
+#### 2. Atom37 类 - 完整重原子表示
+
+##### 数据属性 (Data Attributes)
 
 ```python
-# 创建和加载
+# 核心坐标和掩码数据 (与 Atom14 相同结构，但有37个原子位置)
+coords: torch.Tensor                    # (..., num_residues, 37, 3) - 原子坐标
+atom_mask: torch.Tensor                 # (..., num_residues, 37) - 原子掩码
+res_mask: torch.Tensor                  # (..., num_residues) - 残基掩码
+
+# 蛋白质元数据 (与 Atom14 相同)
+chain_ids: torch.Tensor                 # (..., num_residues) - 链标识符
+residue_types: torch.Tensor             # (..., num_residues) - 残基类型编号
+residue_indices: torch.Tensor           # (..., num_residues) - 全局残基编号
+chain_residue_indices: torch.Tensor     # (..., num_residues) - 链内局部编号
+residue_names: torch.Tensor             # (..., num_residues) - 残基名称编码
+atom_names: torch.Tensor                # (37,) - atom37 原子名称编码
+
+# 可选属性
+b_factors: Optional[torch.Tensor]       # (..., num_residues, 37) - B因子
+occupancies: Optional[torch.Tensor]     # (..., num_residues, 37) - 占用率
+```
+
+##### 属性方法 (Properties)
+
+```python
+device: torch.device                    # 张量所在设备
+batch_shape: torch.Size                 # 批量维度形状
+num_residues: int                       # 残基数量
+num_chains: int                         # 链数量
+num_atoms_per_residue: int              # 每残基原子数 (固定为37)
+```
+
+##### 类方法和实例方法 (与 Atom14 相同)
+
+```python
+# 类方法
+Atom37.from_protein_tensor(protein_tensor, device=None)
+Atom37.load(filepath, map_location=None)
+
+# 基础实例方法 (与 Atom14 相同)
+to_protein_tensor(), to_device(), validate(), save(), to_cif()
+get_backbone_coords(), get_sidechain_coords(), get_chain_residues()
+```
+
+##### Atom37 特有方法
+
+```python
+# 残基级别操作
+get_residue_atoms(residue_idx: int) -> Dict[str, torch.Tensor]
+    # 获取指定残基的所有原子，返回 {'CA': coord, 'N': coord, ...}
+
+compute_center_of_mass() -> torch.Tensor
+    # 计算每个残基的质心坐标 (..., num_residues, 3)
+```
+
+##### 使用示例
+
+```python
 atom37 = Atom37.from_protein_tensor(protein_pt)
+print(f"形状: {atom37.coords.shape}")           # (num_residues, 37, 3)
 
-# 属性访问（类似Atom14，但有37个原子位置）
-coords = atom37.coords              # (num_residues, 37, 3)
-atom_mask = atom37.atom_mask        # (num_residues, 37)
+# 获取主链和侧链 (比 Atom14 更完整)
+backbone = atom37.get_backbone_coords()         # (..., num_residues, 4, 3)
+sidechain = atom37.get_sidechain_coords()       # (..., num_residues, 33, 3)
 
-# 获取特定残基的原子
-residue_atoms = atom37.get_residue_atoms(0)  # 获取第0个残基的所有原子
-ca_coord = residue_atoms['CA']      # 获取CA原子坐标
-
-# 计算质心
-center_of_mass = atom37.compute_center_of_mass()  # (num_residues, 3)
-
-# 几何操作
-backbone = atom37.get_backbone_coords()    # (num_residues, 4, 3)
-sidechain = atom37.get_sidechain_coords()  # (num_residues, 33, 3)
-
-# 保存和加载
-atom37.save("atom37_data.pt")
-loaded_atom37 = Atom37.load("atom37_data.pt")
-
-# 导出为CIF文件
-atom37.to_cif("output.cif")
+# 残基级别操作
+first_residue = atom37.get_residue_atoms(0)     # 第一个残基的所有原子
+ca_coord = first_residue['CA']                  # CA 原子坐标
+center_of_mass = atom37.compute_center_of_mass() # 每个残基的质心
 ```
 
-#### 3. Frame 类
+#### 3. Frame 类 - 刚体坐标系表示
+
+##### 数据属性 (Data Attributes)
 
 ```python
-# 创建和加载
+# 刚体变换数据
+translations: torch.Tensor              # (..., num_residues, 3) - CA 原子坐标
+rotations: torch.Tensor                 # (..., num_residues, 3, 3) - 局部坐标系旋转矩阵
+res_mask: torch.Tensor                  # (..., num_residues) - 残基掩码
+
+# 蛋白质元数据 (与其他类相同，但无 atom_names)
+chain_ids: torch.Tensor                 # (..., num_residues) - 链标识符
+residue_types: torch.Tensor             # (..., num_residues) - 残基类型编号
+residue_indices: torch.Tensor           # (..., num_residues) - 全局残基编号
+chain_residue_indices: torch.Tensor     # (..., num_residues) - 链内局部编号
+residue_names: torch.Tensor             # (..., num_residues) - 残基名称编码
+
+# 可选属性
+b_factors: Optional[torch.Tensor]       # (..., num_residues) - 残基级别B因子
+```
+
+##### 属性方法 (Properties)
+
+```python
+device: torch.device                    # 张量所在设备
+batch_shape: torch.Size                 # 批量维度形状
+num_residues: int                       # 残基数量
+num_chains: int                         # 链数量
+```
+
+##### 类方法和基础实例方法 (与其他类相同)
+
+```python
+# 类方法
+Frame.from_protein_tensor(protein_tensor, device=None)
+Frame.load(filepath, map_location=None)
+
+# 基础实例方法
+to_protein_tensor(), to_device(), validate(), save(), to_cif()
+get_chain_residues()
+```
+
+##### Frame 特有方法
+
+```python
+get_backbone_coords() -> torch.Tensor
+    # 从刚体变换重建主链坐标 (..., num_residues, 4, 3)
+    # 注意：这是通过几何重建的，不是直接存储的坐标
+
+get_local_coordinates() -> Dict[str, torch.Tensor]
+    # 获取标准局部坐标系中的原子位置
+    # 返回: {'N': local_pos, 'CA': local_pos, 'C': local_pos, 'O': local_pos}
+```
+
+##### 使用示例
+
+```python
 frame = Frame.from_protein_tensor(protein_pt)
+print(f"平移形状: {frame.translations.shape}")    # (num_residues, 3)
+print(f"旋转形状: {frame.rotations.shape}")       # (num_residues, 3, 3)
 
-# 属性访问
-translations = frame.translations   # (num_residues, 3) CA原子坐标
-rotations = frame.rotations         # (num_residues, 3, 3) 旋转矩阵
-res_mask = frame.res_mask          # (num_residues,) 残基掩码
+# 刚体变换操作
+backbone_reconstructed = frame.get_backbone_coords()  # 重建主链坐标
+local_coords = frame.get_local_coordinates()          # 标准局部坐标
 
-# 重建主链坐标
-backbone_coords = frame.get_backbone_coords()  # 从刚体变换重建主链
-
-# 获取局部坐标系中的标准原子位置
-local_coords = frame.get_local_coordinates()
-n_local = local_coords['N']    # N原子在局部坐标系中的位置
-ca_local = local_coords['CA']  # CA原子在局部坐标系中的位置
-
-# 保存和加载
-frame.save("frame_data.pt")
-loaded_frame = Frame.load("frame_data.pt")
-
-# 导出为CIF文件
-frame.to_cif("output.cif")
+# 获取局部坐标系中的标准位置
+n_local = local_coords['N']      # N 原子在局部坐标系中的位置
+ca_local = local_coords['CA']    # CA 原子 (原点)
+c_local = local_coords['C']      # C 原子在局部坐标系中的位置
 ```
 
-### 数据验证和属性
+### 公共属性和通用操作
 
-所有核心类都提供以下标准属性和方法：
+所有三个核心类都支持以下标准操作：
 
 ```python
-# 设备信息
-device = atom14.device               # 张量所在设备
-batch_shape = atom14.batch_shape     # 批量维度形状
-num_residues = atom14.num_residues   # 残基数量
-num_chains = atom14.num_chains       # 链数量
+# 设备和形状信息
+device = instance.device                # torch.device - 张量所在设备
+batch_shape = instance.batch_shape      # torch.Size - 批量维度形状
+num_residues = instance.num_residues    # int - 残基数量
+num_chains = instance.num_chains        # int - 链数量
 
 # 数据验证
-atom14.validate()  # 验证数据一致性和有效性
+instance.validate()                     # 验证数据一致性和有效性
 
-# 类型信息
-print(f"数据类型: {type(atom14)}")
-print(f"坐标类型: {type(atom14.coords)}")  # torch.Tensor
+# 设备管理
+instance_gpu = instance.to_device(torch.device("cuda"))
+instance_cpu = instance.to_device(torch.device("cpu"))
+
+# 数据持久化
+instance.save("data.pt")                # 保存为实例
+instance.save("data_dict.pt", save_as_instance=False)  # 保存为字典
+loaded = ClassName.load("data.pt")      # 加载数据
+
+# 格式转换
+protein_tensor = instance.to_protein_tensor()  # 转换回 ProteinTensor
+instance.to_cif("output.cif")           # 导出为 CIF 文件
+
+# 链操作
+chain_residues = instance.get_chain_residues(0)  # 获取指定链的残基
 ```
 
 ### 批量处理 API
